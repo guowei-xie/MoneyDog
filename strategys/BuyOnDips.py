@@ -8,14 +8,24 @@ from utils.data import get_trade_calendar
 from utils.data import get_daily_bars
 from utils.logger import info, debug
 from utils.util import generate_snapshot
-
+import configparser
+import time
+config = configparser.ConfigParser()
+config.read('config.ini', encoding='utf-8')
 
 class BuyOnDips:
-    def __init__(self, backtest_start_time: str, backtest_end_time: str, download_start_time: str):
-        self.backtest_start_time = backtest_start_time
-        self.backtest_end_time = backtest_end_time
-        self.download_start_time = download_start_time
-        self.positions = {}
+    def __init__(self):
+        self.download_start_time = config.get('DOWNLOAD', 'download_start_time')
+        self.download_required = config.get('DOWNLOAD', 'download_required')
+
+        self.backtest_start_time = config.get('BACKTEST', 'backtest_start_time')
+        self.backtest_end_time = config.get('BACKTEST', 'backtest_end_time')
+        self.initial_amount = config.getfloat('BACKTEST', 'initial_amount')
+        self.commission_rate = config.getfloat('BACKTEST', 'commission_rate')
+        self.min_commission = config.getfloat('BACKTEST', 'min_commission')
+        self.tax_rate = config.getfloat('BACKTEST', 'tax_rate')
+
+        self.positions = {} # 初始化持仓
 
     def run(self) -> bool:
         """
@@ -36,19 +46,34 @@ class BuyOnDips:
     def prepare(self) -> bool:
         """
         准备策略运行环境：
-        1. 获取大盘股票池并下载历史数据
-        2. 获取交易日期列表
+        1. 获取交易日期列表
+        2. 如果下载配置为true，则获取大盘股票池并下载历史数据
+        3. 如果下载配置为true，则下载股票分时数据
         Returns:
             bool: 是否准备成功
         """
-        # 1. 获取大盘股票池并下载历史数据
-        stock_list = get_stock_list_in_main_board()
-        download_stock_history_data(stock_list, self.download_start_time, "1d", True)
-        info(f"下载股票历史数据完成: {len(stock_list)} 只股票，开始时间: {self.download_start_time}")
-
-        # 2. 获取交易日期列表
+        # 1. 获取交易日期列表
         self.trade_calendar = get_trade_calendar(self.backtest_start_time, self.backtest_end_time)
         info(f"获取交易日期列表完成: {len(self.trade_calendar)} 天")
+
+        if self.download_required == "false":
+            info(f"下载配置为false，跳过下载大盘股票池历史数据和分时数据")
+            return True
+
+        # 2. 获取大盘股票池并下载历史数据
+        stock_list = get_stock_list_in_main_board()
+
+        info(f"开始获取大盘股票池并下载历史数据")
+        start_time = time.time()
+        download_stock_history_data(stock_list, self.download_start_time, "1d", True)
+        info(f"获取大盘股票池完成: {len(stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
+
+        # 3. 下载股票分时数据
+        info(f"开始下载股票分时数据")
+        start_time = time.time()
+        download_stock_history_data(stock_list, self.download_start_time, self.backtest_end_time, "1m", True)
+        info(f"下载股票分时数据完成: {len(stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
+        return True
 
     def before_open(self, trade_date: str) -> bool:
         """

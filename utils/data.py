@@ -36,9 +36,9 @@ def get_trade_calendar(start_time: str, end_time: str, format: str = 'number') -
     mask = (dates >= start) & (dates <= end)
 
     if format == 'number':
-        return dates[mask].strftime('%Y%m%d').tolist()
+        return [dt.strftime('%Y%m%d') for dt in dates[mask]]
     elif format == 'str':
-        return dates[mask].strftime('%Y-%m-%d').tolist()
+        return [dt.strftime('%Y-%m-%d') for dt in dates[mask]]
     else:
         error(f"无效的格式: {format}")
         raise ValueError(f"无效的格式: {format}")
@@ -77,7 +77,7 @@ def get_stock_list_in_main_board() -> list:
         raise RuntimeError(f"获取{sector_name}主板成分股失败: {e}")
 
 # 下载股票历史数据
-def download_stock_history_data(stock_list: list, start_time: str, period: str = '1d', process_bar: bool = True) -> bool:
+def download_stock_history_data(stock_list: list, start_time: str, end_time: str = '', period: str = '1d', process_bar: bool = True) -> bool:
     """
     下载股票历史K线数据
     Args:
@@ -104,7 +104,7 @@ def download_stock_history_data(stock_list: list, start_time: str, period: str =
     
     iterator = tqdm(stock_list, desc=f"下载历史数据", ncols=100, colour="green") if process_bar else stock_list
     for code in iterator:
-        xtdata.download_history_data(code, period=period, start_time=start_time, incrementally=True)
+        xtdata.download_history_data(code, period=period, start_time=start_time, end_time=end_time, incrementally=True)
     return True
 
 # 获取行情数据
