@@ -54,7 +54,6 @@ def get_stock_list_in_sector(sector_name: str) -> list:
     """
     try:
         stock_list = xtdata.get_stock_list_in_sector(sector_name)
-        debug(f"板块成分股代码列表: {stock_list}")
         return stock_list
     except Exception as e:
         error(f"获取板块成分股失败: {e}")
@@ -70,7 +69,6 @@ def get_stock_list_in_main_board() -> list:
         sector_name = '沪深A股'
         stock_list = get_stock_list_in_sector(sector_name)
         stock_list = [stock for stock in stock_list if get_stock_market_type(stock) == '主板']
-        debug(f"{sector_name}主板成分股代码列表: {stock_list}")
         return stock_list
     except Exception as e:
         error(f"获取{sector_name}主板成分股失败: {e}")
@@ -131,7 +129,6 @@ def get_daily_bars(stock_list: list, period: str = '1d', start_time: str = '', e
             dividend_type='none',
             fill_data=True
         )
-        debug(f"行情数据: {dict_data}")
         return dict_data
     except Exception as e:
         error(f"获取行情数据失败: {e}")

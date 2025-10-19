@@ -1,11 +1,9 @@
 """
 多K线工具库
 """
-
-from doctest import debug
 import pandas as pd
 from laboratory.single import is_limit
-from utils.logger import info, error
+from utils.logger import info, error, debug
 
 
 def is_first_board(stock_code: str, daily_bars: pd.DataFrame) -> bool:
@@ -47,7 +45,7 @@ def get_last_limit_day(stock_code: str, daily_bars: pd.DataFrame, n: int = 5) ->
     debug(f"获取最近{n}天内的最后一次涨停日: {stock_code}")
 
     daily_bars_last = daily_bars.iloc[-n:].copy()
-    debug(f"截至最近{n}天内的数据: {daily_bars_last}")
+    debug(f"截断数据: {daily_bars_last}")
 
     for index, row in daily_bars_last.iterrows():
         if is_limit(stock_code, row['close'], row['preClose']):

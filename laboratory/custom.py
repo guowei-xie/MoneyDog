@@ -54,14 +54,14 @@ def _is_exist_last_first_board(stock_code: str, daily_bars: pd.DataFrame, n: int
     Returns:
         bool: 是否符合条件，True表示符合，False表示不符合
     """
-    debug(f"判断是否存在最近{n}个交易日内存在涨停板，且最近一次涨停是首板: {stock_code}")
+    debug(f"判断最近{n}个交易日中是否存在涨停板，且最近一次涨停是首板: {stock_code}")
     last_limit_day = get_last_limit_day(stock_code, daily_bars, n)
     if last_limit_day == -1:
         return False
 
     # 判断最近一次涨停是首板
     # 使用last_limit_day索引, 截断daily_bars后，使用is_first_board判断
-    daily_bars_last = daily_bars.iloc[last_limit_day:].copy()
+    daily_bars_last = daily_bars.loc[last_limit_day:].copy()
     debug(f"截断数据： {daily_bars_last}")
     if not is_first_board(stock_code, daily_bars_last):
         return False
