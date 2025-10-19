@@ -10,6 +10,7 @@ from utils.logger import info, debug
 from utils.util import generate_snapshot
 import configparser
 import time
+from laboratory.custom import select_stock_by_first_board_after_volume_consolidation
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
 
@@ -61,18 +62,18 @@ class BuyOnDips:
             return True
 
         # 2. 获取大盘股票池并下载历史数据
-        stock_list = get_stock_list_in_main_board()
+        self.global_stock_list = get_stock_list_in_main_board()
 
         info(f"开始获取大盘股票池并下载历史数据")
         start_time = time.time()
-        download_stock_history_data(stock_list, self.download_start_time, "1d", True)
-        info(f"获取大盘股票池完成: {len(stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
+        download_stock_history_data(self.global_stock_list, self.download_start_time, "1d", True)
+        info(f"获取大盘股票池完成: {len(self.global_stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
 
         # 3. 下载股票分时数据
         info(f"开始下载股票分时数据")
         start_time = time.time()
-        download_stock_history_data(stock_list, self.download_start_time, self.backtest_end_time, "1m", True)
-        info(f"下载股票分时数据完成: {len(stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
+        download_stock_history_data(self.global_stock_list, self.download_start_time, self.backtest_end_time, "1m", True)
+        info(f"下载股票分时数据完成: {len(self.global_stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
         return True
 
     def before_open(self, trade_date: str) -> bool:
@@ -113,6 +114,14 @@ class BuyOnDips:
         Returns:
             list: 自选股票列表
         """
+        daily_bars = get_daily_bars(self.global_stock_list, "1d", self.download_start_time, trade_date, count=30)
+        result = []
+        for stock_code, daily_bar in daily_bars.items():
+            if select_stock_by_first_board_after_volume_consolidation(daily_bar):
+                result.append(stock_code)
+
+
+
         return []
 
     def _get_holding_stock_list(self, trade_date: str) -> list:
