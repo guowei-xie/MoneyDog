@@ -129,6 +129,12 @@ def get_daily_bars(stock_list: list, period: str = '1d', start_time: str = '', e
             dividend_type='none',
             fill_data=True
         )
+
+        # 清洗数据，价格字段保留两位小数
+        for stock in dict_data:
+            for field in dict_data[stock]:
+                if field in ['open', 'high', 'low', 'close', 'preClose']:
+                    dict_data[stock][field] = dict_data[stock][field].astype(float).round(2)
         return dict_data
     except Exception as e:
         error(f"获取行情数据失败: {e}")

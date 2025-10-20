@@ -27,6 +27,7 @@ def is_first_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     4. 最近的涨停日次日的成交量不低于涨停日的80%
     5. 最近的涨停日次日至今，成交量逐日递减
     6. 最近的涨停日次日至今，日内震荡幅度处于涨停日价格的-1%~6%之间
+    7. 最近的涨停日次日至今，日线实体最低价不破涨停日收盘价
     """
     # 判断是否符合条件1
     if not _is_exist_last_first_board(stock_code, daily_bars, n):
@@ -41,7 +42,7 @@ def is_first_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     
     # 判断是否符合条件4
 
-    
+    return True
 
 
 def _is_exist_last_first_board(stock_code: str, daily_bars: pd.DataFrame, n: int = 5) -> bool:
@@ -60,9 +61,8 @@ def _is_exist_last_first_board(stock_code: str, daily_bars: pd.DataFrame, n: int
         return False
 
     # 判断最近一次涨停是首板
-    # 使用last_limit_day索引, 截断daily_bars后，使用is_first_board判断
-    daily_bars_last = daily_bars.loc[last_limit_day:].copy()
-    debug(f"截断数据： {daily_bars_last}")
+    daily_bars_last = daily_bars.loc[:last_limit_day].copy()
+    # debug(f"截断数据： {daily_bars_last}")
     if not is_first_board(stock_code, daily_bars_last):
         return False
     return True

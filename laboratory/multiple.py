@@ -47,7 +47,8 @@ def get_last_limit_day(stock_code: str, daily_bars: pd.DataFrame, n: int = 5) ->
     daily_bars_last = daily_bars.iloc[-n:].copy()
     debug(f"截断数据: {daily_bars_last}")
 
-    for index, row in daily_bars_last.iterrows():
+    # 从后往前遍历，找到最近的涨停日
+    for index, row in daily_bars_last.iloc[::-1].iterrows():
         if is_limit(stock_code, row['close'], row['preClose']):
             debug(f"获取成功, 索引: {index}")
             return index

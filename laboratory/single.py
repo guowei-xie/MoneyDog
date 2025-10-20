@@ -37,9 +37,11 @@ def is_limit(stock_code: str, price: float, previous_close: float, limit_type: s
     """
     limit_percentage = get_limit_percentage(stock_code)
     if limit_type == 'up':
-        return price >= previous_close * (1 + limit_percentage) - tolerance
+        limit_price = previous_close * (1 + limit_percentage - tolerance) 
+        return price >= limit_price
     elif limit_type == 'down':
-        return price <= previous_close * (1 - limit_percentage) + tolerance
+        limit_price = previous_close * (1 - limit_percentage + tolerance)
+        return price <= limit_price
     else:
         return False
 
