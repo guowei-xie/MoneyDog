@@ -83,4 +83,16 @@ def get_limit_price(stock_code: str, previous_close: float, limit_type: str = 'u
     else:
         return None
 
+# 计算日内震荡幅度
+def get_daily_fluctuation(open: float, low: float, high: float) -> float:
+    """
+    计算日内震荡幅度
+    Args:
+        open: 开盘价
+        low: 最低价
+        high: 最高价
+    Returns:
+        float: 日内震荡幅度
+    """
+    return round((high - low) / open, 4)
 

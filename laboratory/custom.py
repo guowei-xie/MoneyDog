@@ -3,8 +3,8 @@
 """
 
 import pandas as pd
-from laboratory.single import is_limit, is_one_board
-from laboratory.multiple import get_last_limit_day, is_first_board
+from laboratory.singleK import is_limit, is_one_board
+from laboratory.multipleK import get_last_limit_day, is_first_board, get_daily_bars_by_date, is_volume_decreasing, get_ma, is_ma_bullish, get_macd
 from utils.logger import info, error, debug
 
 # 判断是否符合日K线图形：首板后的缩量盘整
@@ -27,7 +27,10 @@ def is_first_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     4. 最近的涨停日次日的成交量不低于涨停日的80%
     5. 最近的涨停日次日至今，成交量逐日递减
     6. 最近的涨停日次日至今，日内震荡幅度处于涨停日价格的-1%~6%之间
-    7. 最近的涨停日次日至今，日线实体最低价不破涨停日收盘价
+    7. 最近的涨停日次日至今，日线收盘价不破涨停日收盘价
+    8. 今日收盘价格高于30日均线价格
+    9. 今日收盘价格均线多头排列（MA5>MA10>MA20>MA30）
+    10.今日MACD顶部左侧（今日红柱大于昨日红柱）
     """
     # 判断是否符合条件1
     if not _is_exist_last_first_board(stock_code, daily_bars, n):
@@ -37,11 +40,48 @@ def is_first_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     if _is_exist_one_board(stock_code, daily_bars, m):
         return False
     
-    # 判断是否符合条件3
+    last_limit_day = get_last_limit_day(stock_code, daily_bars, n)
+    focused_bars = get_daily_bars_by_date(daily_bars, start_date=last_limit_day, end_date=daily_bars.index[-1])
     
+    # 判断是否符合条件3（通过focused_bars数量判断）
+    if len(focused_bars) <= k:
+        return False
     
-    # 判断是否符合条件4
+    # 判断是否符合条件4（第2根K线与第1根K线的volume字段比值>=80%）
+    volume_ratio = focused_bars['volume'].iloc[1] / focused_bars['volume'].iloc[0]
+    if volume_ratio < 0.8:
+        return False
+    
+    # 判断是否符合条件5（排除第1根K线后，成交量逐日递减）
+    if not is_volume_decreasing(focused_bars.iloc[1:]):
+        return False
 
+
+    # 判断是否符合条件6（排除第1根K线后，日内震荡幅度处于涨停日价格的-1%~6%之间）
+    limit_price = focused_bars.iloc[0]['close']
+    lowest_price = focused_bars.iloc[1:]['low'].min()
+    highest_price = focused_bars.iloc[1:]['high'].max()
+    if lowest_price / limit_price - 1 < -0.01 or highest_price / limit_price - 1 > 0.06:
+        return False
+
+    # 判断是否符合条件7（排除第1根K线后，日线实体最低价不破涨停日收盘价）
+    if focused_bars.iloc[1:]['close'].min() < limit_price:
+        return False
+
+    # 判断是否符合条件8（今日收盘价格高于30日均线价格）
+    ma_price = get_ma(daily_bars=daily_bars, period=30)
+    if focused_bars.iloc[-1]['close'] <= ma_price:
+        return False
+
+    # 判断是否符合条件9（均线多头排列（MA5>MA10>MA20>MA30））
+    if not is_ma_bullish(daily_bars=daily_bars):
+        return False
+
+    # 判断是否符合条件10（今日MACD柱大于昨日MACD柱））
+    macd_data = get_macd(daily_bars=daily_bars)
+    if macd_data.iloc[-1]['macd'] <= macd_data.iloc[-2]['macd']:
+        return False
+    
     return True
 
 
@@ -79,7 +119,7 @@ def _is_exist_one_board(stock_code: str, daily_bars: pd.DataFrame, m: int = 10) 
     """
     debug(f"判断是否存在最近{m}个交易日内存在一字板: {stock_code}")
     daily_bars_last = daily_bars.iloc[-m:].copy()
-    debug(f"截断数据： {daily_bars_last}")
+    # debug(f"截断数据： {daily_bars_last}")
     for index, row in daily_bars_last.iterrows():
         if is_one_board(stock_code, row['close'], row['preClose'], row['low'], row['high']):
             return True

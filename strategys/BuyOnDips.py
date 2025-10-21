@@ -37,8 +37,8 @@ class BuyOnDips:
         for trade_date in self.trade_calendar:
             self.before_open(trade_date)
 
-            for minute_snapshot in self.minute_snapshots:
-                self.on_minute(minute_snapshot)
+            # for minute_snapshot in self.minute_snapshots:
+            #     self.on_minute(minute_snapshot)
 
         return True
         
@@ -96,17 +96,17 @@ class BuyOnDips:
         self.selected_stock_list = self._get_selected_stock_list(trade_date)
         info(f"获取自选股票列表（预买入）完成: {len(self.selected_stock_list)} 只股票")
 
-        # 2. 获取持仓股票列表（预卖出）
-        self.holding_stock_list = self._get_holding_stock_list(trade_date)
-        info(f"获取持仓股票列表（预卖出）完成: {len(self.holding_stock_list)} 只股票")
+        # # 2. 获取持仓股票列表（预卖出）
+        # self.holding_stock_list = self._get_holding_stock_list(trade_date)
+        # info(f"获取持仓股票列表（预卖出）完成: {len(self.holding_stock_list)} 只股票")
 
-        # 3. 缓存盘前指标数据（备用于盘中运行）
-        self._set_cached(trade_date)
-        info(f"缓存盘前数据（备用于盘中运行）完成")
+        # # 3. 缓存盘前指标数据（备用于盘中运行）
+        # self._set_cached(trade_date)
+        # info(f"缓存盘前数据（备用于盘中运行）完成")
 
-        # 4. 获取当日股池的分时线行情数据，并模拟生成分时快照
-        self.snapshots = self._simulate_minute_daily(trade_date)
-        info(f"模拟生成分时行情快照数据完成")
+        # # 4. 获取当日股池的分时线行情数据，并模拟生成分时快照
+        # self.snapshots = self._simulate_minute_daily(trade_date)
+        # info(f"模拟生成分时行情快照数据完成")
 
     def _get_selected_stock_list(self, trade_date: str) -> list:
         """
@@ -123,6 +123,8 @@ class BuyOnDips:
                 result.append(stock_code)
         info(f"获取自选股票列表（预买入）完成: {len(result)} 只股票")
         info(f"自选股票列表: {result}")
+        if result:
+            print(result)
 
 
 

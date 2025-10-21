@@ -103,3 +103,14 @@ def generate_snapshot(self, daily_bars: dict) -> list:
         list: 股票池各截至时间的快照数据 [{'time': time, 'snapshot': [{'stock_code': stock_code, 'bars': bars}]}]
     """
     return []
+
+def get_date_interval(date1: str, date2: str) -> int:
+    """
+    计算两个数字格式日期的间隔天数
+    Args:
+        date1: 日期1，格式为'YYYYMMDD'
+        date2: 日期2，格式为'YYYYMMDD'
+    Returns:
+        int: 间隔天数
+    """
+    return (pd.to_datetime(date1) - pd.to_datetime(date2)).days
