@@ -9,6 +9,8 @@ from utils.util import generate_snapshot
 import configparser
 import time
 from laboratory.custom import is_first_board_after_volume_consolidation
+from utils.broker import Broker
+from laboratory.singleK import get_limit_price
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
 
@@ -16,15 +18,10 @@ class BuyOnDips:
     def __init__(self):
         self.download_start_time = config.get('DOWNLOAD', 'download_start_time')
         self.download_required = config.get('DOWNLOAD', 'download_required')
-
         self.backtest_start_time = config.get('BACKTEST', 'backtest_start_time')
         self.backtest_end_time = config.get('BACKTEST', 'backtest_end_time')
-        self.initial_amount = config.getfloat('BACKTEST', 'initial_amount')
-        self.commission_rate = config.getfloat('BACKTEST', 'commission_rate')
-        self.min_commission = config.getfloat('BACKTEST', 'min_commission')
-        self.tax_rate = config.getfloat('BACKTEST', 'tax_rate')
 
-        self.positions = {} # 初始化持仓
+        self.broker = Broker()
 
     def run(self) -> bool:
         """
@@ -40,6 +37,7 @@ class BuyOnDips:
             # for minute_snapshot in self.minute_snapshots:
             #     self.on_minute(minute_snapshot)
 
+        
         return True
         
     def prepare(self) -> bool:
@@ -94,19 +92,22 @@ class BuyOnDips:
 
         # 1. 获取自选股票列表（预买入）
         self.selected_stock_list = self._get_selected_stock_list(trade_date)
-        info(f"获取自选股票列表（预买入）完成: {len(self.selected_stock_list)} 只股票")
-
         # # 2. 获取持仓股票列表（预卖出）
-        # self.holding_stock_list = self._get_holding_stock_list(trade_date)
-        # info(f"获取持仓股票列表（预卖出）完成: {len(self.holding_stock_list)} 只股票")
+        self.holding_stock_list = self._get_holding_stock_list()
 
-        # # 3. 缓存盘前指标数据（备用于盘中运行）
-        # self._set_cached(trade_date)
+        if not self.selected_stock_list and not self.holding_stock_list:
+            info(f"没有自选股票和持仓股票，跳过策略开盘前运行")
+            return False
+
+        # 3. 缓存盘前指标数据（备用于盘中运行）
+        self._set_cached(trade_date)
         # info(f"缓存盘前数据（备用于盘中运行）完成")
 
         # # 4. 获取当日股池的分时线行情数据，并模拟生成分时快照
         # self.snapshots = self._simulate_minute_daily(trade_date)
         # info(f"模拟生成分时行情快照数据完成")
+        
+        return True
 
     def _get_selected_stock_list(self, trade_date: str) -> list:
         """
@@ -123,22 +124,23 @@ class BuyOnDips:
                 result.append(stock_code)
         info(f"获取自选股票列表（预买入）完成: {len(result)} 只股票")
         info(f"自选股票列表: {result}")
-        if result:
-            print(result)
+        return result
 
-
-
-        return []
-
-    def _get_holding_stock_list(self, trade_date: str) -> list:
+    def _get_holding_stock_list(self) -> list:
         """
         获取持仓股票列表（预卖出）
-        Args:
-            trade_date: 交易日期
         Returns:
             list: 持仓股票列表
         """
-        return []
+        positions = self.broker.positions
+        result = []
+        # 检查每个持仓，volume大于0的才是实际持仓
+        for stock_code, position in positions.items():
+            if position.get('volume', 0) > 0:
+                result.append(stock_code)
+        info(f"获取持仓股票列表（预卖出）完成: {len(result)} 只股票")
+        info(f"持仓股票列表: {result}")
+        return result
 
     def _set_cached(self, trade_date: str) -> bool:
         """
@@ -149,6 +151,17 @@ class BuyOnDips:
             bool: 是否成功
         """
         self.cached = {}
+        for stock_code in self.selected_stock_list + self.holding_stock_list:
+            # 缓存近30日K线数据
+            daily_bars = get_daily_bars(stock_code, "1d", trade_date, 30)
+            self.cached[stock_code] = daily_bars
+            # 缓存涨停价和跌停价
+            self.cached[stock_code]['limit_price_up'] = get_limit_price(stock_code, daily_bars.iloc[-1]['close'], 'up')
+            self.cached[stock_code]['limit_price_down'] = get_limit_price(stock_code, daily_bars.iloc[-1]['close'], 'down')
+
+
+        
+       
         return True
 
     def _simulate_minute_daily(self, trade_date: str) -> list:
@@ -190,7 +203,7 @@ class BuyOnDips:
         Args:
             snapshot: 分时快照
         Returns:
-            dict: 买入信号
+            dict: 买入信号 {'action': 'buy', 'stock_code': stock_code, 'price': price, 'volume': volume}
         """
         return {}
 
@@ -200,7 +213,7 @@ class BuyOnDips:
         Args:
             snapshot: 分时快照
         Returns:
-            dict: 卖出信号
+            dict: 卖出信号 {'action': 'sell', 'stock_code': stock_code, 'price': price, 'volume': volume}
         """
         return {}
 
@@ -212,4 +225,11 @@ class BuyOnDips:
         Returns:
             bool: 是否成功
         """
+        if signal['action'] == 'buy':
+            self.buy(signal)
+        elif signal['action'] == 'sell':
+            self.sell(signal)
+
+
+
         return True
