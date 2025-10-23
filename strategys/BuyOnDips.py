@@ -5,7 +5,7 @@ from utils.data import get_stock_list_in_main_board, download_stock_history_data
 from utils.data import get_trade_calendar
 from utils.data import get_daily_bars
 from utils.logger import info, debug
-from utils.util import generate_snapshot
+from utils.util import generate_minute_snapshot
 import configparser
 import time
 from laboratory.custom import is_first_board_after_volume_consolidation
@@ -101,11 +101,11 @@ class BuyOnDips:
 
         # 3. 缓存盘前指标数据（备用于盘中运行）
         self._set_cached(trade_date)
-        # info(f"缓存盘前数据（备用于盘中运行）完成")
+        info(f"缓存盘前数据（备用于盘中运行）完成")
 
-        # # 4. 获取当日股池的分时线行情数据，并模拟生成分时快照
-        # self.snapshots = self._simulate_minute_daily(trade_date)
-        # info(f"模拟生成分时行情快照数据完成")
+        # 4. 获取当日股池的分时线行情数据，并模拟生成分时快照
+        self.minute_snapshots = self._simulate_minute_daily(trade_date)
+        info(f"模拟生成分时行情快照数据完成")
         
         return True
 
@@ -151,17 +151,20 @@ class BuyOnDips:
             bool: 是否成功
         """
         self.cached = {}
-        for stock_code in self.selected_stock_list + self.holding_stock_list:
-            # 缓存近30日K线数据
-            daily_bars = get_daily_bars(stock_code, "1d", trade_date, 30)
-            self.cached[stock_code] = daily_bars
-            # 缓存涨停价和跌停价
-            self.cached[stock_code]['limit_price_up'] = get_limit_price(stock_code, daily_bars.iloc[-1]['close'], 'up')
-            self.cached[stock_code]['limit_price_down'] = get_limit_price(stock_code, daily_bars.iloc[-1]['close'], 'down')
+        stock_list = self.selected_stock_list + self.holding_stock_list
+        daily_bars = get_daily_bars(stock_list, "1d", start_time="", end_time=trade_date, count=30)
+
+        # 缓存大盘数据
+
+        # 缓存个股数据
+        for stock_code, daily_bar in daily_bars.items():
+            self.cached[stock_code] = {
+                'daily_bar': daily_bar,
+                'limit_price_up': get_limit_price(stock_code, daily_bar.iloc[-1]['close'], 'up'),
+                'limit_price_down': get_limit_price(stock_code, daily_bar.iloc[-1]['close'], 'down')
+            }
 
 
-        
-       
         return True
 
     def _simulate_minute_daily(self, trade_date: str) -> list:
@@ -173,8 +176,8 @@ class BuyOnDips:
             list: 各股票各分钟的快照数据 [{'minute': minute, 'snapshot': [{'stock_code': stock_code, 'bars': bars}]}]
         """
         stock_list = self.selected_stock_list + self.holding_stock_list
-        daily_bars = get_daily_bars(stock_list, "1m", trade_date)
-        snapshots = generate_snapshot(daily_bars)
+        daily_bars = get_daily_bars(stock_list, "1m", trade_date, trade_date, count=-1)
+        snapshots = generate_minute_snapshot(daily_bars)
         return snapshots
     
     def on_minute(self, snapshot: dict) -> bool:

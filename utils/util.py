@@ -94,15 +94,45 @@ def get_stock_market_type(stock_code: str) -> str:
     else:
         return '主板'
 
-def generate_snapshot(self, daily_bars: dict) -> list:
+def generate_minute_snapshot(daily_bars: dict) -> list:
     """
-    生成行情快照
+    生成分时行情快照
     Args:
-        daily_bars: 股票池各截至时间的K线数据
+        daily_bars: 股票池各股票的分时K线数据，形式如{"000001.SZ": DataFrame, ...}
     Returns:
-        list: 股票池各截至时间的快照数据 [{'time': time, 'snapshot': [{'stock_code': stock_code, 'bars': bars}]}]
+        list: 分时快照数据 [{'minute': minute, 'snapshot': [{'stock_code': stock_code, 'bars': bars}]}]
     """
-    return []
+    # 1. 所有股票的所有index（分钟时间戳）集合
+    all_minute_set = set()
+    for df in daily_bars.values():
+        if len(df) > 0:
+            # 支持index为datetime或str
+            idx = df.index.astype(str)
+            all_minute_set |= set(idx)
+    if not all_minute_set:
+        return []
+
+    # 2. 对齐时间: 升序
+    all_minutes = sorted(all_minute_set)
+    snapshots = []
+    for minute in all_minutes:
+        snap = []
+        for stock_code, df in daily_bars.items():
+            if len(df) == 0:
+                continue
+            # df.index可能是DatetimeIndex或str, 为保证兼容统一转str比较
+            str_index = df.index.astype(str)
+            # 选取所有小于等于当前minute的bars
+            # 假定数据已是当日/已按时间排序
+            if minute in str_index.values:
+                # 取出从开盘至当前minute的所有bars
+                bars = df.loc[str_index <= minute].copy()
+                # 如果bars非空
+                if len(bars) > 0:
+                    snap.append({'stock_code': stock_code, 'bars': bars})
+        snapshots.append({'minute': minute, 'snapshot': snap})
+    return snapshots
+
 
 def get_date_interval(date1: str, date2: str) -> int:
     """

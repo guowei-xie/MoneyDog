@@ -28,10 +28,19 @@ def test_get_stock_list_in_main_board():
 
 def test_get_daily_bars():
     """
-    测试获取日K线数据
+    测试获取K线数据
     """
     stock_list = ['000001.SZ', '000002.SZ']
-    daily_bars = get_daily_bars(stock_list, "1d", "20250101", "20250131", count=3)
+    # 测试获取日K线数据
+    daily_bars = get_daily_bars(stock_list, "1d", "20250101", "", count=-1)
+    for stock_code, daily_bar in daily_bars.items():
+        print(stock_code)
+        print(daily_bar)
+        print('-'*100)
+
+    # 测试获取分时K线数据
+    stock_list = ['603102.SH', '603615.SH']
+    daily_bars = get_daily_bars(stock_list, "1m", "20250101", "", count=-1)
     for stock_code, daily_bar in daily_bars.items():
         print(stock_code)
         print(daily_bar)
