@@ -8,6 +8,7 @@ from utils.logger import info, debug
 from utils.util import generate_minute_snapshot
 import configparser
 import time
+import pandas as pd
 from laboratory.custom import is_first_board_after_volume_consolidation
 from utils.broker import Broker
 from laboratory.singleK import get_limit_price
@@ -34,8 +35,8 @@ class BuyOnDips:
         for trade_date in self.trade_calendar:
             self.before_open(trade_date)
 
-            # for minute_snapshot in self.minute_snapshots:
-            #     self.on_minute(minute_snapshot)
+            for minute_snapshot in self.minute_snapshots:
+                self.on_minute(minute_snapshot)
 
         
         return True
@@ -72,7 +73,7 @@ class BuyOnDips:
         # 4. 下载股票分时数据
         info(f"开始下载股票分时数据")
         start_time = time.time()
-        download_stock_history_data(self.global_stock_list, self.download_start_time, self.backtest_end_time, "1m", True)
+        download_stock_history_data(self.global_stock_list, self.download_start_time, "1m", True)
         info(f"下载股票分时数据完成: {len(self.global_stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
         return True
 
@@ -89,6 +90,9 @@ class BuyOnDips:
             bool: 是否成功
         """
         info(f"策略开盘前运行: {trade_date}")
+
+        # 解锁昨日所有锁定的持仓
+        self.broker.unlock_position()
 
         # 1. 获取自选股票列表（预买入）
         self.selected_stock_list = self._get_selected_stock_list(trade_date)
@@ -184,39 +188,38 @@ class BuyOnDips:
         """
         策略盘中分时线运行
         Args:
-            snapshot: 行情快照 {'time': time, 'snapshot': [{'stock_code': stock_code, 'bars': bars}]}
+            snapshot: 行情快照 {'minute': minute, 'snapshot': [{'stock_code': stock_code, 'bars': bars}]}
         Returns:
             bool: 是否成功
         """
-        debug(f"策略盘中分时线运行: {snapshot}")
-
-        for snp in snapshot['snapshot']:
-            if snp['stock_code'] in self.selected_stock_list:
-                signal = self._buy_signal(snp)
-            elif snp['stock_code'] in self.holding_stock_list:
-                signal = self._sell_signal(snp)
+        for stock_code, bars in snapshot['snapshot']:
+            if stock_code in self.selected_stock_list:
+                signal = self._buy_signal(stock_code, bars)
+            elif stock_code in self.holding_stock_list:
+                signal = self._sell_signal(stock_code, bars)
             if signal:
                 self.trade(signal)
-
         return True
 
-    def _buy_signal(self, snapshot: dict) -> dict:
+    def _buy_signal(self, stock_code: str, bars: pd.DataFrame) -> dict:
         """
         买入信号
         Args:
-            snapshot: 分时快照
+            stock_code: 股票代码
+            bars: 分时K线快照
         Returns:
-            dict: 买入信号 {'action': 'buy', 'stock_code': stock_code, 'price': price, 'volume': volume}
+            dict: 买入信号 {'action': 'buy', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time}
         """
         return {}
 
-    def _sell_signal(self, snapshot: dict) -> dict:
+    def _sell_signal(self, stock_code: str, bars: pd.DataFrame) -> dict:
         """
         卖出信号
         Args:
-            snapshot: 分时快照
+            stock_code: 股票代码
+            bars: 分时K线快照
         Returns:
-            dict: 卖出信号 {'action': 'sell', 'stock_code': stock_code, 'price': price, 'volume': volume}
+            dict: 卖出信号 {'action': 'sell', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time}
         """
         return {}
 
@@ -229,9 +232,9 @@ class BuyOnDips:
             bool: 是否成功
         """
         if signal['action'] == 'buy':
-            self.buy(signal)
+            self.broker.buy(signal)
         elif signal['action'] == 'sell':
-            self.sell(signal)
+            self.broker.sell(signal)
 
 
 
