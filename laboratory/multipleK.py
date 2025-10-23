@@ -5,6 +5,31 @@ import pandas as pd
 from laboratory.singleK import is_limit
 from utils.logger import info, error, debug
 
+def get_limit_board_number(stock_code: str, daily_bars: pd.DataFrame) -> int:
+    """
+    获取涨停是第几板（从后向前数，连续涨停K线的数量，遇到非涨停即终止，建议最后一条数据为涨停日K线）
+    Args:
+        stock_code: 股票代码
+        daily_bars: 日K线数据框（建议最后一条数据为涨停日）
+    Returns:
+        int: 涨停是第几板
+    """
+    debug(f"获取涨停是第几板: {stock_code}")
+    
+    # 如果数据为空，直接返回0
+    if len(daily_bars) == 0:
+        return 0
+
+    limit_board = 0
+    for idx in range(len(daily_bars) - 1, -1, -1):
+        close = daily_bars['close'].iloc[idx]
+        preClose = daily_bars['preClose'].iloc[idx]
+        if is_limit(stock_code, close, preClose):
+            limit_board += 1
+        else:
+            break
+
+    return limit_board
 
 def is_first_board(stock_code: str, daily_bars: pd.DataFrame) -> bool:
     """
@@ -17,20 +42,12 @@ def is_first_board(stock_code: str, daily_bars: pd.DataFrame) -> bool:
     """
     debug(f"判断是否符合首板图形要求: {stock_code}")
 
-    # 至少需要2条数据
+    # 首板要求至少2条K线数据
     if len(daily_bars) < 2:
         debug(f"日K线数据不足2条: {stock_code}, 数据: {daily_bars}")
         return False
-    
-    # 判断当日是否涨停
-    if not is_limit(stock_code, daily_bars['close'].iloc[-1], daily_bars['preClose'].iloc[-1]):
-        return False
-    
-    # 判断前一日是否涨停
-    if is_limit(stock_code, daily_bars['close'].iloc[-2], daily_bars['preClose'].iloc[-2]):
-        return False
-    
-    return True
+
+    return get_limit_board_number(stock_code, daily_bars) == 1
 
 def get_last_limit_day(stock_code: str, daily_bars: pd.DataFrame, n: int = 5) -> int:
     """
