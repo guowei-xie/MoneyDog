@@ -2,7 +2,9 @@
 模拟交易实现
 """
 import configparser
-from utils.logger import info, debug
+from utils.logger import info, debug, error
+import pandas as pd
+from datetime import datetime
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
 
@@ -139,6 +141,41 @@ class Broker:
             self.positions[stock_code]['disabled_volume'] = 0
         return True
 
+    def clean_position(self) -> bool:
+        """
+        用于盘前清除所有volume为0的持仓股票信息
+        Returns:
+            bool: 是否成功
+        """
+        for stock_code in list(self.positions.keys()):
+            if self.positions.get(stock_code, {}).get('volume', 0) == 0:
+                del self.positions[stock_code]
+        return True
+
+    def get_position_cost(self) -> float:
+        """
+        获取持仓成本
+        Returns:
+            float: 持仓成本
+        """
+        return sum(pos.get('cost_price', 0) * pos.get('volume', 0) for pos in self.positions.values())
+
+    def get_total_assets(self) -> float:
+        """
+        获取总资产
+        Returns:
+            float: 总资产
+        """
+        return self.available_amount + self.get_position_cost()
+
+    def get_total_profit_rate(self) -> float:
+        """
+        获取总盈利率
+        Returns:
+            float: 总盈利率
+        """
+        return (self.get_total_assets() / self.initial_amount - 1) * 100
+
     def record_transaction(self, stock_code: str, price: float, volume: int, action: str, cost_price: float, commission: float, tax: float, time: str) -> bool:
         """
         记录每笔交易
@@ -165,3 +202,96 @@ class Broker:
             'time': time
         })
         return True
+
+    # 下载交易记录至csv文件
+    def download_transactions(self) -> bool:
+        """
+        下载交易记录至csv文件 results/transactions_YYYYMMDD_HHMMSS.csv
+        Returns:
+            bool: 是否成功
+        """
+        df = pd.DataFrame(self.transactions)
+        df.to_csv(f'results/transactions_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv', index=False)
+        info(f"下载交易记录至csv文件完成- results/transactions_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv")
+        return True
+
+    # 分析结果
+    def analyze_result(self) -> bool:
+        """
+        分析结果
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 1. 计算总资产（可用资金 + 持仓价值，持仓以成本价估算）
+            total_position_value = self.get_position_cost()
+            total_assets = self.get_total_assets()
+            total_return = self.get_total_profit_rate()
+
+            # 2. 利用DataFrame分析交易记录
+            df = pd.DataFrame(self.transactions)
+            stock_perf = {}  # 单股票盈亏分析
+
+            if not df.empty:
+                for code, trades in df.groupby('stock_code'):
+                    buys = trades[trades['action'] == 'buy']
+                    sells = trades[trades['action'] == 'sell']
+
+                    # 问题1：买入和卖出金额统计方式有误，加上了所有buy/sell的commission，但实际上commission已在每笔买/卖成本中计算，应分别汇总
+                    # 问题2：最大回撤（max_drawdown）统计不准确，这里只是单股票的最低收益率，实际应是收益率的最大下行幅度。这里只能作为简化统计理解。
+
+                    if not buys.empty and not sells.empty:
+                        # 【修正】买入成本=总买入金额+总买入佣金
+                        buy_cost = (buys['price'] * buys['volume']).sum() + buys['commission'].sum()
+                        # 卖出收入=总卖出金额-总卖出佣金-总卖出税
+                        sell_income = (sells['price'] * sells['volume']).sum() - sells['commission'].sum() - sells['tax'].sum()
+                        pl = sell_income - buy_cost
+                        rr = (pl / buy_cost) * 100 if buy_cost != 0 else 0
+                        stock_perf[code] = dict(return_rate=rr, buy_cost=buy_cost, sell_income=sell_income, profit_loss=pl)
+
+            # 3. 简化统计汇总
+            completed = list(stock_perf.values())
+            total_completed = len(completed)
+            win_rates = [x['return_rate'] for x in completed if x['return_rate'] > 0]
+            loss_rates = [x['return_rate'] for x in completed if x['return_rate'] < 0]
+            win_rate = (len(win_rates) / total_completed * 100) if total_completed else 0
+            avg_profit_rate = sum(win_rates) / len(win_rates) if win_rates else 0
+            avg_loss_rate = sum(loss_rates) / len(loss_rates) if loss_rates else 0
+            # 【简化最大回撤】这里只是收益率极小值，非真正最大回撤
+            max_drawdown = min([x['return_rate'] for x in completed], default=0)
+
+            total_trades = len(self.transactions)
+            total_commission = sum(t.get('commission', 0) for t in self.transactions)
+            total_tax = sum(t.get('tax', 0) for t in self.transactions)
+            total_costs = total_commission + total_tax
+
+            # 4. 输出分析
+            info("=" * 100)
+            info("回测分析结果")
+            info("=" * 100)
+            info(f"初始资金: {self.initial_amount:,.2f} 元")
+            info(f"当前可用资金: {self.available_amount:,.2f} 元")
+            info(f"持仓价值(成本价估算): {total_position_value:,.2f} 元")
+            info(f"总资产: {total_assets:,.2f} 元")
+            info(f"总盈利: {total_return:.2f}%")
+            info(f"总交易次数: {total_trades}")
+            info(f"完成交易股票数: {total_completed}")
+            info(f"胜率: {win_rate:.2f}%")
+            info(f"平均盈利率: {avg_profit_rate:.2f}%")
+            info(f"平均亏损率: {avg_loss_rate:.2f}%")
+            info(f"最大回撤(个股): {max_drawdown:.2f}%")
+            info(f"总手续费: {total_commission:,.2f} 元")
+            info(f"总印花税: {total_tax:,.2f} 元")
+            info(f"总交易成本: {total_costs:,.2f} 元")
+            info("=" * 60)
+
+            if stock_perf:
+                info("各股票表现详情:")
+                for code, v in stock_perf.items():
+                    stat = "盈利" if v['return_rate'] > 0 else "亏损"
+                    info(f"  {code}: {v['return_rate']:.2f}% ({stat})")
+
+            return True
+        except Exception as e:
+            error(f"分析结果时发生错误: {e}")
+            return False

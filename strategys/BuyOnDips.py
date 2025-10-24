@@ -5,7 +5,7 @@ from utils.data import get_stock_list_in_main_board, download_stock_history_data
 from utils.data import get_trade_calendar
 from utils.data import get_daily_bars
 from utils.logger import info, debug
-from utils.util import generate_minute_snapshot
+from utils.util import generate_minute_snapshot, get_elapsed_time_str
 import configparser
 import time
 import pandas as pd
@@ -17,6 +17,7 @@ config.read('config.ini', encoding='utf-8')
 
 class BuyOnDips:
     def __init__(self):
+        self.start_time = time.time()
         self.download_start_time = config.get('DOWNLOAD', 'download_start_time')
         self.download_required = config.get('DOWNLOAD', 'download_required')
         self.backtest_start_time = config.get('BACKTEST', 'backtest_start_time')
@@ -33,12 +34,14 @@ class BuyOnDips:
         self.prepare()
 
         for trade_date in self.trade_calendar:
-            self.before_open(trade_date)
+            if not self.before_open(trade_date):
+                info("="*100)
+                continue
 
             for minute_snapshot in self.minute_snapshots:
                 self.on_minute(minute_snapshot)
-
-        
+            info("="*100)
+        self.end_of_backtest()
         return True
         
     def prepare(self) -> bool:
@@ -90,14 +93,19 @@ class BuyOnDips:
             bool: 是否成功
         """
         info(f"策略开盘前运行: {trade_date}")
-
-        # 解锁昨日所有锁定的持仓
+        # 资产概览
+        info(f"可用资金: {self.broker.available_amount:,.2f} 元，持仓成本: {self.broker.get_position_cost():,.2f} 元，总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%")
+        # 盘前清除volume为0的持仓股票信息、解锁昨日所有被锁定的持仓
+        self.broker.clean_position()
         self.broker.unlock_position()
-
-        # 1. 获取自选股票列表（预买入）
-        self.selected_stock_list = self._get_selected_stock_list(trade_date)
-        # # 2. 获取持仓股票列表（预卖出）
+        
+        # 1. 获取持仓股票列表（预卖出）
         self.holding_stock_list = self._get_holding_stock_list()
+
+        # 2. 获取自选股票列表（预买入），过滤掉已经持仓的股票
+        self.selected_stock_list = self._get_selected_stock_list(trade_date)
+        self.selected_stock_list = [stock_code for stock_code in self.selected_stock_list if stock_code not in self.holding_stock_list]
+        info(f"自选股票列表（预买入）: {self.selected_stock_list}")
 
         if not self.selected_stock_list and not self.holding_stock_list:
             info(f"没有自选股票和持仓股票，跳过策略开盘前运行")
@@ -127,7 +135,7 @@ class BuyOnDips:
             if is_first_board_after_volume_consolidation(stock_code, daily_bar):
                 result.append(stock_code)
         info(f"获取自选股票列表（预买入）完成: {len(result)} 只股票")
-        info(f"自选股票列表: {result}")
+        debug(f"自选股票列表: {result}")
         return result
 
     def _get_holding_stock_list(self) -> list:
@@ -192,12 +200,18 @@ class BuyOnDips:
         Returns:
             bool: 是否成功
         """
-        for stock_code, bars in snapshot['snapshot']:
+        for item in snapshot['snapshot']:
+            stock_code = item.get('stock_code')
+            bars = item.get('bars')
+            if not stock_code or bars is None:
+                continue
             if stock_code in self.selected_stock_list:
                 signal = self._buy_signal(stock_code, bars)
             elif stock_code in self.holding_stock_list:
                 signal = self._sell_signal(stock_code, bars)
-            if signal:
+            else:
+                continue
+            if signal is not None:
                 self.trade(signal)
         return True
 
@@ -210,7 +224,16 @@ class BuyOnDips:
         Returns:
             dict: 买入信号 {'action': 'buy', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time}
         """
-        return {}
+        # 测试：当第10分钟时，买入信号
+        if len(bars) == 10:
+            return {
+                'action': 'buy',
+                'stock_code': stock_code,
+                'price': bars.iloc[9]['close'],
+                'volume': 100,
+                'time': bars.index[9]
+            }
+        return None
 
     def _sell_signal(self, stock_code: str, bars: pd.DataFrame) -> dict:
         """
@@ -221,7 +244,16 @@ class BuyOnDips:
         Returns:
             dict: 卖出信号 {'action': 'sell', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time}
         """
-        return {}
+        # 测试：当第15分钟时，卖出信号
+        if len(bars) == 15:
+            return {
+                'action': 'sell',
+                'stock_code': stock_code,
+                'price': bars.iloc[14]['close'],
+                'volume': 100,
+                'time': bars.index[14] 
+            }
+        return None
 
     def trade(self, signal: dict) -> bool:
         """
@@ -236,6 +268,15 @@ class BuyOnDips:
         elif signal['action'] == 'sell':
             self.broker.sell(signal)
 
+        return True
 
-
+    def end_of_backtest(self) -> bool:
+        """
+        回测结束
+        Returns:
+            bool: 是否成功
+        """
+        self.broker.download_transactions()
+        self.broker.analyze_result()
+        info(f"回测结束，运行耗时: {get_elapsed_time_str(self.start_time)}")
         return True

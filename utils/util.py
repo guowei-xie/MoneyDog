@@ -5,6 +5,7 @@
 
 import pandas as pd
 from utils.logger import error
+import time
 
 def date_str_to_num_str(date_str: str) -> str:
     """
@@ -144,3 +145,17 @@ def get_date_interval(date1: str, date2: str) -> int:
         int: 间隔天数
     """
     return (pd.to_datetime(date1) - pd.to_datetime(date2)).days
+
+def get_elapsed_time_str(start_time: float) -> str:
+    """
+    计时器，返回耗时小时:分钟:秒字符串
+    Args:
+        start_time: 开始时间 float，如time.time()
+    Returns:
+        str: 耗时小时:分钟:秒字符串，如'01小时:02分:03秒'
+    """
+    elapsed = time.time() - start_time
+    hours = int(elapsed // 3600)
+    minutes = int((elapsed % 3600) // 60)
+    seconds = int(elapsed % 60)
+    return f"{hours}小时{minutes}分{seconds}秒"

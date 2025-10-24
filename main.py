@@ -11,4 +11,3 @@ if __name__ == "__main__":
     info("MoneyDog 主程序运行开始")
     strategy = BuyOnDips()
     strategy.run()
-    info("MoneyDog 主程序运行结束")
