@@ -5,6 +5,8 @@ import configparser
 from utils.logger import info, debug, error
 import pandas as pd
 from datetime import datetime
+from utils.util import time_str_to_datetime
+import matplotlib.pyplot as plt
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
 
@@ -17,6 +19,7 @@ class Broker:
         self.tax_rate = config.getfloat('BACKTEST', 'tax_rate')
         self.positions = {} # 持仓 {'stock_code': {'cost_price': cost_price, 'volume': volume, 'disabled_volume': disabled_volume}}
         self.transactions = [] # 交易记录 [{'stock_code': stock_code, 'price': price, 'volume': volume, 'action': action, 'cost_price': cost_price, 'time': time}]
+        self.position_and_account_changes = [] # 持仓与账户信息变动记录 [{'trade_date': trade_date, 'stock_count': stock_count, 'stock_cost': stock_cost, 'stock_value': stock_value, 'available_amount': available_amount, 'total_assets': total_assets}]
 
     def buy(self, signal: dict) -> bool:
         """
@@ -39,7 +42,7 @@ class Broker:
         cost_all = total_cost + commission
         # 判断是否可用资金不足，如果不足则返回False
         if self.available_amount < cost_all:
-            info(f"资金不足，无法买入: {stock_code} 资金需求: {cost_all}, 可用: {self.available_amount}, 时间: {time}")
+            info(f"资金不足，无法买入: {stock_code} 资金需求: {cost_all}, 可用: {self.available_amount}, 时间: {time_str_to_datetime(time)}")
             return False
         # 更新持仓
         self.set_position(stock_code, price, volume)
@@ -47,7 +50,7 @@ class Broker:
         self.available_amount -= cost_all
         # 记录交易
         self.record_transaction(stock_code, price, volume, action, price, commission, 0, time)
-        info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，时间: {time}")
+        info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，时间: {time_str_to_datetime(time)}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
         return True
@@ -69,7 +72,7 @@ class Broker:
         # 计算可用仓位
         available_volume = self.get_available_volume(stock_code)
         if available_volume < volume:
-            info(f"可用仓位不足，无法卖出: {stock_code} 可用仓位: {available_volume}, 需求: {volume}, 时间: {time}")
+            info(f"可用仓位不足，无法卖出: {stock_code} 可用仓位: {available_volume}, 需求: {volume}, 时间: {time_str_to_datetime(time)}")
             return False
         # 计算卖出金额
         total_cost = price * volume
@@ -82,7 +85,7 @@ class Broker:
         self.available_amount += total_cost - commission - tax
         # 记录交易
         self.record_transaction(stock_code, price, volume, action, price, commission, tax, time)
-        info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，印花税: {tax}，时间: {time}")
+        info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，印花税: {tax}，时间: {time_str_to_datetime(time)}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
         return True
@@ -152,6 +155,24 @@ class Broker:
                 del self.positions[stock_code]
         return True
 
+    # 盘后更新持仓信息
+    def update_position(self, minute_snapshot: dict) -> bool:
+        """
+        盘后更新持仓信息（使用最后一个minute快照的close价格更新持仓最新价格）
+        Args:
+            minute_snapshot: 最后一个minute快照 {'minute': minute, 'snapshot': [{'stock_code': stock_code, 'bars': bars}]}
+        Returns:
+            bool: 是否成功
+        """
+        # 遍历持仓，使用最后一个minute快照的close价格更新持仓最新价格
+        for stock_code in self.positions:
+            stock_snapshot = next((item for item in minute_snapshot['snapshot'] if item['stock_code'] == stock_code), None)
+            if stock_snapshot:
+                bars = stock_snapshot['bars']
+                if not bars.empty:
+                    self.positions[stock_code]['last_price'] = bars.iloc[-1]['close']
+        return True
+
     def get_position_cost(self) -> float:
         """
         获取持仓成本
@@ -160,13 +181,21 @@ class Broker:
         """
         return sum(pos.get('cost_price', 0) * pos.get('volume', 0) for pos in self.positions.values())
 
+    def get_position_value(self) -> float:
+        """
+        获取持仓价值
+        Returns:
+            float: 持仓价值
+        """
+        return sum(pos.get('last_price', 0) * pos.get('volume', 0) for pos in self.positions.values())
+
     def get_total_assets(self) -> float:
         """
         获取总资产
         Returns:
             float: 总资产
         """
-        return self.available_amount + self.get_position_cost()
+        return self.available_amount + self.get_position_value()
 
     def get_total_profit_rate(self) -> float:
         """
@@ -199,57 +228,97 @@ class Broker:
             'cost_price': cost_price,
             'commission': commission,
             'tax': tax,
-            'time': time
+            'time': time,
+            'time_str': time_str_to_datetime(time)
         })
         return True
+     
+    # 记录持仓与账户信息变动记录
+    def record_position_and_account_change(self, trade_date: str) -> bool:
+        """
+        记录持仓与账户信息变动记录（持仓数量、持仓成本、持仓价值、可用资金、总资产）
+        Args:
+            trade_date: 交易日期
+        Returns:
+            bool: 是否成功
+        """
+        # 获取个股持仓数量（volume>0的持仓股数）
+        stock_count = len([pos for pos in self.positions.values() if pos['volume'] > 0])
+        # 获取个股持仓成本
+        stock_cost = sum(pos.get('cost_price', 0) * pos.get('volume', 0) for pos in self.positions.values() if pos.get('volume', 0) > 0)
+        # 获取个股持仓价值
+        stock_value = sum(pos.get('last_price', 0) * pos.get('volume', 0) for pos in self.positions.values() if pos.get('volume', 0) > 0)
+        # 获取可用资金
+        available_amount = self.available_amount
+        # 获取总资产
+        total_assets = self.get_total_assets()
+        # 记录持仓与账户信息变动记录
+        self.position_and_account_changes.append({
+            'trade_date': trade_date,
+            'stock_count': stock_count,
+            'stock_cost': stock_cost,
+            'stock_value': stock_value,
+            'available_amount': available_amount,
+            'total_assets': total_assets
+        })
+        return True
+
 
     # 下载交易记录至csv文件
     def download_transactions(self) -> bool:
         """
-        下载交易记录至csv文件 results/transactions_YYYYMMDD_HHMMSS.csv
+        下载交易记录与持仓变动记录至csv文件 results/results_YYYYMMDD_HHMMSS.csv 
+        分别保存为两个sheet，sheet1为交易记录，sheet2为持仓变动记录
         Returns:
             bool: 是否成功
         """
-        df = pd.DataFrame(self.transactions)
-        df.to_csv(f'results/transactions_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv', index=False)
-        info(f"下载交易记录至csv文件完成- results/transactions_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv")
+        df_transactions = pd.DataFrame(self.transactions)
+        df_position_and_account_changes = pd.DataFrame(self.position_and_account_changes)
+        with pd.ExcelWriter(f'results/results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx') as writer:
+            df_transactions.to_excel(writer, sheet_name='交易记录', index=False)
+            df_position_and_account_changes.to_excel(writer, sheet_name='持仓变动记录', index=False)
+        info(f"下载交易记录与持仓变动记录至csv文件完成- results/results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx")
         return True
 
     # 分析结果
     def analyze_result(self) -> bool:
         """
-        分析结果
+        分析结果，包括真正的最大回撤计算，并增加最大持仓股票数与平均持仓天数计算
         Returns:
             bool: 是否成功
         """
         try:
-            # 1. 计算总资产（可用资金 + 持仓价值，持仓以成本价估算）
-            total_position_value = self.get_position_cost()
+            total_position_value = self.get_position_value()
             total_assets = self.get_total_assets()
             total_return = self.get_total_profit_rate()
 
-            # 2. 利用DataFrame分析交易记录
-            df = pd.DataFrame(self.transactions)
-            stock_perf = {}  # 单股票盈亏分析
+            # 1. 统计交易次数及成本
+            total_trades = len(self.transactions)
+            total_commission = sum(t.get('commission', 0) for t in self.transactions)
+            total_tax = sum(t.get('tax', 0) for t in self.transactions)
+            total_costs = total_commission + total_tax
+            stock_count_list = [x['stock_count'] for x in self.position_and_account_changes] if self.position_and_account_changes else []
+            max_position_count = max(stock_count_list) if stock_count_list else 0
 
+            # 2. 个股闭环盈亏统计
+            df = pd.DataFrame(self.transactions)
+            stock_perf = {}
             if not df.empty:
                 for code, trades in df.groupby('stock_code'):
                     buys = trades[trades['action'] == 'buy']
                     sells = trades[trades['action'] == 'sell']
-
-                    # 问题1：买入和卖出金额统计方式有误，加上了所有buy/sell的commission，但实际上commission已在每笔买/卖成本中计算，应分别汇总
-                    # 问题2：最大回撤（max_drawdown）统计不准确，这里只是单股票的最低收益率，实际应是收益率的最大下行幅度。这里只能作为简化统计理解。
-
                     if not buys.empty and not sells.empty:
-                        # 【修正】买入成本=总买入金额+总买入佣金
-                        buy_cost = (buys['price'] * buys['volume']).sum() + buys['commission'].sum()
-                        # 卖出收入=总卖出金额-总卖出佣金-总卖出税
-                        sell_income = (sells['price'] * sells['volume']).sum() - sells['commission'].sum() - sells['tax'].sum()
+                        buy_amt = (buys['price'] * buys['volume']).sum()
+                        buy_comm = buys['commission'].sum() if 'commission' in buys else 0
+                        buy_cost = buy_amt + buy_comm
+                        sell_amt = (sells['price'] * sells['volume']).sum()
+                        sell_comm = sells['commission'].sum() if 'commission' in sells else 0
+                        sell_tax = sells['tax'].sum() if 'tax' in sells else 0
+                        sell_income = sell_amt - sell_comm - sell_tax
                         pl = sell_income - buy_cost
                         rr = (pl / buy_cost) * 100 if buy_cost != 0 else 0
                         stock_perf[code] = dict(return_rate=rr, buy_cost=buy_cost, sell_income=sell_income, profit_loss=pl)
 
-            # 3. 简化统计汇总
             completed = list(stock_perf.values())
             total_completed = len(completed)
             win_rates = [x['return_rate'] for x in completed if x['return_rate'] > 0]
@@ -257,13 +326,29 @@ class Broker:
             win_rate = (len(win_rates) / total_completed * 100) if total_completed else 0
             avg_profit_rate = sum(win_rates) / len(win_rates) if win_rates else 0
             avg_loss_rate = sum(loss_rates) / len(loss_rates) if loss_rates else 0
-            # 【简化最大回撤】这里只是收益率极小值，非真正最大回撤
-            max_drawdown = min([x['return_rate'] for x in completed], default=0)
 
-            total_trades = len(self.transactions)
-            total_commission = sum(t.get('commission', 0) for t in self.transactions)
-            total_tax = sum(t.get('tax', 0) for t in self.transactions)
-            total_costs = total_commission + total_tax
+            # 3. 计算历史资产曲线最大回撤（真实最大回撤）
+            max_assets = -float('inf')
+            max_drawdown = 0.0
+            # 获取资产曲线（按日期排序）
+            if self.position_and_account_changes:
+                df_pac = pd.DataFrame(self.position_and_account_changes)
+                df_pac = df_pac.sort_values('trade_date')
+                asset_curve = df_pac['total_assets'].tolist()
+                if asset_curve:
+                    peak = asset_curve[0]
+                    max_dd = 0.0
+                    for v in asset_curve:
+                        if v > peak:
+                            peak = v
+                        dd = (peak - v) / peak if peak != 0 else 0
+                        if dd > max_dd:
+                            max_dd = dd
+                    max_drawdown = max_dd * 100
+                else:
+                    max_drawdown = 0.0
+            else:
+                max_drawdown = 0.0
 
             # 4. 输出分析
             info("=" * 100)
@@ -279,11 +364,12 @@ class Broker:
             info(f"胜率: {win_rate:.2f}%")
             info(f"平均盈利率: {avg_profit_rate:.2f}%")
             info(f"平均亏损率: {avg_loss_rate:.2f}%")
-            info(f"最大回撤(个股): {max_drawdown:.2f}%")
+            info(f"最大回撤: {max_drawdown:.2f}%")
+            info(f"最大持仓股票数: {max_position_count}")
             info(f"总手续费: {total_commission:,.2f} 元")
             info(f"总印花税: {total_tax:,.2f} 元")
             info(f"总交易成本: {total_costs:,.2f} 元")
-            info("=" * 60)
+            info("=" * 100)
 
             if stock_perf:
                 info("各股票表现详情:")

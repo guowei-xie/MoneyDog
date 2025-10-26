@@ -32,15 +32,13 @@ class BuyOnDips:
             bool: 是否成功
         """
         self.prepare()
-
         for trade_date in self.trade_calendar:
-            if not self.before_open(trade_date):
-                info("="*100)
-                continue
-
-            for minute_snapshot in self.minute_snapshots:
-                self.on_minute(minute_snapshot)
-            info("="*100)
+            proceed = self.before_open(trade_date)
+            if proceed:
+                for minute_snapshot in self.minute_snapshots:
+                    self.on_minute(minute_snapshot)
+            self.after_close(trade_date)
+            info("=" * 100)
         self.end_of_backtest()
         return True
         
@@ -92,9 +90,9 @@ class BuyOnDips:
         Returns:
             bool: 是否成功
         """
-        info(f"策略开盘前运行: {trade_date}")
+        info(f"策略开盘前运行: 【{trade_date}】")
         # 资产概览
-        info(f"可用资金: {self.broker.available_amount:,.2f} 元，持仓成本: {self.broker.get_position_cost():,.2f} 元，总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%")
+        info(f"可用资金: {self.broker.available_amount:,.2f} 元，持仓价值: {self.broker.get_position_value():,.2f} 元，总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%")
         # 盘前清除volume为0的持仓股票信息、解锁昨日所有被锁定的持仓
         self.broker.clean_position()
         self.broker.unlock_position()
@@ -109,15 +107,14 @@ class BuyOnDips:
 
         if not self.selected_stock_list and not self.holding_stock_list:
             info(f"没有自选股票和持仓股票，跳过策略开盘前运行")
+            self.minute_snapshots = []
             return False
 
         # 3. 缓存盘前指标数据（备用于盘中运行）
         self._set_cached(trade_date)
-        info(f"缓存盘前数据（备用于盘中运行）完成")
 
         # 4. 获取当日股池的分时线行情数据，并模拟生成分时快照
         self.minute_snapshots = self._simulate_minute_daily(trade_date)
-        info(f"模拟生成分时行情快照数据完成")
         
         return True
 
@@ -267,6 +264,24 @@ class BuyOnDips:
             self.broker.buy(signal)
         elif signal['action'] == 'sell':
             self.broker.sell(signal)
+
+        return True
+
+    def after_close(self, trade_date: str) -> bool:
+        """
+        每日收盘后运行
+        Args:
+            trade_date: 交易日期
+        Returns:
+            bool: 是否成功
+        """
+        if self.minute_snapshots:
+            minute_snapshot = self.minute_snapshots[-1]
+            self.broker.update_position(minute_snapshot)
+        else:
+            info(f"没有分时快照数据，跳过盘后更新持仓信息")
+
+        self.broker.record_position_and_account_change(trade_date)
 
         return True
 

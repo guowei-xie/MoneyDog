@@ -159,3 +159,14 @@ def get_elapsed_time_str(start_time: float) -> str:
     minutes = int((elapsed % 3600) // 60)
     seconds = int(elapsed % 60)
     return f"{hours}小时{minutes}分{seconds}秒"
+
+# 时间转换，例如 20250909093900 转换为 2025-09-09 09:39:00
+def time_str_to_datetime(time_str: str) -> str:
+    """
+    时间转换，例如 20250909093900 转换为 2025-09-09 09:39:00
+    Args:
+        time_str: 时间字符串，格式为'YYYYMMDDHHMMSS'
+    Returns:
+        str: 时间字符串，格式为'YYYY-MM-DD HH:MM:SS'，例如 '2025-09-09 09:39:00'
+    """
+    return pd.to_datetime(time_str, format='%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
