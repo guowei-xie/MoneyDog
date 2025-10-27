@@ -25,7 +25,7 @@ class Broker:
         """
         买入
         Args:
-            signal: 买入信号 {'action': 'buy', 'stock_code': stock_code, 'price': price, 'volume': volume}
+            signal: 买入信号 {'action': 'buy', 'stock_code': stock_code, 'price': price, 'volume': volume, 'desc': desc}
         Returns:
             bool: 是否成功
         """
@@ -34,7 +34,7 @@ class Broker:
         volume = signal['volume']
         action = signal['action']
         time = signal['time']
-
+        desc = signal['desc']
         # 计算买入金额
         total_cost = price * volume
         # 计算佣金
@@ -42,7 +42,7 @@ class Broker:
         cost_all = total_cost + commission
         # 判断是否可用资金不足，如果不足则返回False
         if self.available_amount < cost_all:
-            info(f"资金不足，无法买入: {stock_code} 资金需求: {cost_all}, 可用: {self.available_amount}, 时间: {time_str_to_datetime(time)}")
+            info(f"资金不足，无法买入: {stock_code} 资金需求: {cost_all}, 可用: {self.available_amount}, 时间: {time_str_to_datetime(time)}，描述: {desc}")
             return False
         # 更新持仓
         self.set_position(stock_code, price, volume)
@@ -50,7 +50,7 @@ class Broker:
         self.available_amount -= cost_all
         # 记录交易
         self.record_transaction(stock_code, price, volume, action, price, commission, 0, time)
-        info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，时间: {time_str_to_datetime(time)}")
+        info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
         return True
@@ -59,7 +59,7 @@ class Broker:
         """
         卖出
         Args:
-            signal: 卖出信号 {'action': 'sell', 'stock_code': stock_code, 'price': price, 'volume': volume}
+            signal: 卖出信号 {'action': 'sell', 'stock_code': stock_code, 'price': price, 'volume': volume, 'desc': desc}
         Returns:
             bool: 是否成功
         """
@@ -68,11 +68,12 @@ class Broker:
         volume = signal['volume']
         action = signal['action']
         time = signal['time']
+        desc = signal['desc']
         
         # 计算可用仓位
         available_volume = self.get_available_volume(stock_code)
         if available_volume < volume:
-            info(f"可用仓位不足，无法卖出: {stock_code} 可用仓位: {available_volume}, 需求: {volume}, 时间: {time_str_to_datetime(time)}")
+            info(f"可用仓位不足，无法卖出: {stock_code} 可用仓位: {available_volume}, 需求: {volume}, 时间: {time_str_to_datetime(time)}，描述: {desc}")
             return False
         # 计算卖出金额
         total_cost = price * volume
@@ -85,7 +86,7 @@ class Broker:
         self.available_amount += total_cost - commission - tax
         # 记录交易
         self.record_transaction(stock_code, price, volume, action, price, commission, tax, time)
-        info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，印花税: {tax}，时间: {time_str_to_datetime(time)}")
+        info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，印花税: {tax}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
         return True
@@ -233,7 +234,6 @@ class Broker:
         })
         return True
      
-    # 记录持仓与账户信息变动记录
     def record_position_and_account_change(self, trade_date: str) -> bool:
         """
         记录持仓与账户信息变动记录（持仓数量、持仓成本、持仓价值、可用资金、总资产）
@@ -263,6 +263,26 @@ class Broker:
         })
         return True
 
+    # 获取个股建仓日期（最后一次买入日期）
+    def get_build_date(self, stock_code: str) -> str:
+        """
+        获取个股建仓日期（最后一次买入日期）
+        Args:
+            stock_code: 股票代码
+        Returns:
+            str: 建仓日期，格式为'YYYYMMDD'，如果未找到建仓日期，则返回空字符串
+        """
+        # 首先检查该股票是否在持仓中，如果不在持仓中，则返回空字符串
+        if stock_code not in self.positions:
+            return ''
+
+        # 从最近到最早，找到该股票最后一次买入的交易，直接取time_str前8位的数字返回，如果未找到建仓日期，则返回空字符串
+        for transaction in reversed(self.transactions):
+            if transaction.get('stock_code') == stock_code and transaction.get('action') == 'buy':
+                time_str = str(transaction.get('time_str', ''))
+                if len(time_str) >= 8:
+                    return time_str.replace('-', '').replace(':', '').replace(' ', '')[:8]
+        return ''
 
     # 下载交易记录至csv文件
     def download_transactions(self) -> bool:

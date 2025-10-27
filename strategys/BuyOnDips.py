@@ -1,17 +1,18 @@
 """
 买入在低点策略实现
 """
-from utils.data import get_stock_list_in_main_board, download_stock_history_data
-from utils.data import get_trade_calendar
-from utils.data import get_daily_bars
-from utils.logger import info, debug
-from utils.util import generate_minute_snapshot, get_elapsed_time_str
-import configparser
 import time
+import configparser
 import pandas as pd
-from laboratory.custom import is_first_board_after_volume_consolidation
+
+from utils.data import get_stock_list_in_main_board, get_trade_calendar, get_daily_bars, download_stock_history_data
+from utils.logger import info, debug
+from utils.util import generate_minute_snapshot, get_elapsed_time_str, add_num_date_days
 from utils.broker import Broker
+from laboratory.multipleK import get_last_limit_day_kline, get_ma
+from laboratory.custom import is_limit_board_after_volume_consolidation
 from laboratory.singleK import get_limit_price
+
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
 
@@ -90,7 +91,7 @@ class BuyOnDips:
         Returns:
             bool: 是否成功
         """
-        info(f"策略开盘前运行: 【{trade_date}】")
+        info(f"策略开盘前运行: 【{add_num_date_days(trade_date, 1)}】")
         # 资产概览
         info(f"可用资金: {self.broker.available_amount:,.2f} 元，持仓价值: {self.broker.get_position_value():,.2f} 元，总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%")
         # 盘前清除volume为0的持仓股票信息、解锁昨日所有被锁定的持仓
@@ -114,7 +115,7 @@ class BuyOnDips:
         self._set_cached(trade_date)
 
         # 4. 获取当日股池的分时线行情数据，并模拟生成分时快照
-        self.minute_snapshots = self._simulate_minute_daily(trade_date)
+        self.minute_snapshots = self._simulate_minute_daily(add_num_date_days(trade_date, 1) )
         
         return True
 
@@ -129,7 +130,7 @@ class BuyOnDips:
         daily_bars = get_daily_bars(stock_list=self.global_stock_list, period="1d", end_time=trade_date, count=30)
         result = []
         for stock_code, daily_bar in daily_bars.items():
-            if is_first_board_after_volume_consolidation(stock_code, daily_bar):
+            if is_limit_board_after_volume_consolidation(stock_code, daily_bar):
                 result.append(stock_code)
         info(f"获取自选股票列表（预买入）完成: {len(result)} 只股票")
         debug(f"自选股票列表: {result}")
@@ -167,10 +168,23 @@ class BuyOnDips:
 
         # 缓存个股数据
         for stock_code, daily_bar in daily_bars.items():
+            # 获取建仓日
+            build_date = self.broker.get_build_date(stock_code)
+            # 建仓日前的涨停交易日K线数据
+            if build_date:
+                before_build_limit_day_kline = get_last_limit_day_kline(stock_code, daily_bar.loc[:build_date], 5)
+            else:
+                before_build_limit_day_kline = pd.DataFrame()
+
+            # 缓存个股数据
             self.cached[stock_code] = {
-                'daily_bar': daily_bar,
-                'limit_price_up': get_limit_price(stock_code, daily_bar.iloc[-1]['close'], 'up'),
-                'limit_price_down': get_limit_price(stock_code, daily_bar.iloc[-1]['close'], 'down')
+                'daily_bar': daily_bar, # 日K线数据
+                'limit_price_up': get_limit_price(stock_code, daily_bar.iloc[-1]['close'], 'up'), # 当日涨停价格
+                'limit_price_down': get_limit_price(stock_code, daily_bar.iloc[-1]['close'], 'down'), # 当日跌停价格
+                'day_ma4': get_ma(daily_bars=daily_bar, period=4), # 4日均价线
+                'day_ma19': get_ma(daily_bars=daily_bar, period=19), # 19日均价线
+                'build_date': build_date, # 建仓日期
+                'before_build_limit_day_kline': before_build_limit_day_kline # 建仓日前的涨停交易日K线数据
             }
 
 
@@ -221,14 +235,23 @@ class BuyOnDips:
         Returns:
             dict: 买入信号 {'action': 'buy', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time}
         """
-        # 测试：当第10分钟时，买入信号
-        if len(bars) == 10:
+        # 判断是否已持仓
+        if stock_code in self.broker.positions:
+            return None
+
+        # 动态ma5 = (ma4 * 4 + 当前价 )/ 5
+        dynamic_ma5 = (self.cached[stock_code]['day_ma4'] * 4 + bars.iloc[-1]['close']) / 5
+
+        # 误差
+        error = 0.002
+        if dynamic_ma5 >= bars.iloc[-1]['low'] * (1 - error):  
             return {
                 'action': 'buy',
                 'stock_code': stock_code,
-                'price': bars.iloc[9]['close'],
+                'price': dynamic_ma5,
                 'volume': 100,
-                'time': bars.index[9]
+                'time': bars.index[-1],
+                'desc': "动态ma5价格买入"
             }
         return None
 
@@ -248,7 +271,8 @@ class BuyOnDips:
                 'stock_code': stock_code,
                 'price': bars.iloc[14]['close'],
                 'volume': 100,
-                'time': bars.index[14] 
+                'time': bars.index[14],
+                'desc': "15分钟时卖出"
             }
         return None
 

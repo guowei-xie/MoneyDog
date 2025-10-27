@@ -8,7 +8,7 @@ import sys
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from laboratory.multipleK import is_first_board, get_last_limit_day, get_daily_bars_by_date, get_ma, get_macd
+from laboratory.multipleK import is_first_board, get_last_limit_day, get_daily_bars_by_date, get_ma, get_macd, get_volume_change_rate, get_average_volume
 from utils.data import get_daily_bars
 
 def test_is_first_board():
@@ -91,9 +91,29 @@ def test_get_macd():
     macd_data = get_macd(daily_bars=daily_bars)
     print(macd_data)
 
+def test_get_average_volume():
+    """
+    test_get_average_volume函数
+    """
+    daily_bars = get_daily_bars(stock_list=['002291.SZ'], period='1d', end_time='20251020', count=30)
+    daily_bars = daily_bars['002291.SZ']
+    daily_bars = get_average_volume(daily_bars=daily_bars)
+    print(daily_bars)
+
+def test_get_volume_change_rate():
+    """
+    test_get_volume_change_rate函数
+    """
+    daily_bars = get_daily_bars(stock_list=['002291.SZ'], period='1d', end_time='20251020', count=30)
+    daily_bars = daily_bars['002291.SZ']
+    volume_change_rate = get_volume_change_rate(daily_bars=daily_bars)
+    print(volume_change_rate)
+
 if __name__ == '__main__':
     # test_is_first_board()
     # test_get_last_limit_day()
     # test_get_daily_bars_by_date()
     # test_get_ma()
-    test_get_macd()
+    # test_get_macd()
+    # test_get_volume_change_rate()
+    test_get_average_volume()

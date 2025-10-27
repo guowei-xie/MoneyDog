@@ -71,6 +71,22 @@ def get_last_limit_day(stock_code: str, daily_bars: pd.DataFrame, n: int = 5) ->
             return index
     return -1
 
+# 获取最近N天内的最后一次涨停日K线数据
+def get_last_limit_day_kline(stock_code: str, daily_bars: pd.DataFrame, n: int = 5) -> pd.DataFrame:
+    """
+    获取最近N天内的最后一次涨停日的单日K线数据（仅涨停日那一天的K线数据）
+    Args:
+        stock_code: 股票代码
+        daily_bars: 日K线数据框
+        n: 最近N天内的最后一次涨停日
+    Returns:
+        pd.DataFrame: 最近的涨停日K线数据，不存在时返回pd.DataFrame()
+    """
+    last_limit_day = get_last_limit_day(stock_code, daily_bars, n)
+    if last_limit_day == -1:
+        return pd.DataFrame()
+    return daily_bars.loc[last_limit_day:last_limit_day]
+
 def get_daily_bars_by_date(daily_bars: pd.DataFrame, start_date: str, end_date: str) -> pd.DataFrame:
     """
     获取指定日期的K线数据
@@ -115,6 +131,36 @@ def get_ma(daily_bars: pd.DataFrame, period: int = 5) -> float:
     """
     ma_price = daily_bars['close'].rolling(window=period).mean().iloc[-1]
     return round(ma_price, 2)
+
+def get_average_volume(daily_bars: pd.DataFrame, period: int = 5) -> float:
+    """
+    滑动计算日均成交量
+    Args:
+        daily_bars: 日K线数据框
+        period: 滑动周期，默认为5
+    Returns:
+        daily_bars: 新增'average_volume'列，包含每个交易日日均成交量
+    """
+    daily_bars = daily_bars.copy()
+    daily_bars['average_volume'] = daily_bars['volume'].rolling(window=period).mean()
+    return daily_bars
+
+def get_volume_change_rate(daily_bars: pd.DataFrame) -> pd.DataFrame:
+    """
+    计算每个交易日成交量相对前一个交易日成交量变化率
+    Args:
+        daily_bars: 日K线数据框
+    Returns:
+        daily_bars: 新增'volume_change_rate'列，包含每个交易日成交量相对前一个交易日的变化率（第一个交易日为NaN）
+    """
+    if len(daily_bars) < 2:
+        daily_bars = daily_bars.copy()
+        daily_bars['volume_change_rate'] = float('nan')
+        return daily_bars
+    daily_bars = daily_bars.copy()
+    daily_bars['volume_change_rate'] = daily_bars['volume'].pct_change()
+    return daily_bars
+    
 
 # 均线多头排列（MA5>MA10>MA20>MA30）
 def is_ma_bullish(daily_bars: pd.DataFrame) -> bool:

@@ -170,3 +170,19 @@ def time_str_to_datetime(time_str: str) -> str:
         str: 时间字符串，格式为'YYYY-MM-DD HH:MM:SS'，例如 '2025-09-09 09:39:00'
     """
     return pd.to_datetime(time_str, format='%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
+
+#  数字日期加减天数，返回数字日期，例如 20250909 加1天，返回 20250910，减1天，返回 20250908
+def add_num_date_days(date_str: str, days: int) -> str:
+    """
+    数字日期加减天数，返回数字日期
+    Args:
+        date_str: 日期字符串，格式为'YYYYMMDD'
+        days: 天数
+    Returns:
+        str: 日期字符串，格式为'YYYYMMDD'
+    """
+    # 检查date_str格式和长度，确保为8位数字
+    if not (isinstance(date_str, str) and len(date_str) == 8 and date_str.isdigit()):
+        raise ValueError(f"date_str必须为8位数字字符串，实际为: {date_str}")
+    new_date = pd.to_datetime(date_str, format='%Y%m%d') + pd.Timedelta(days=days)
+    return new_date.strftime('%Y%m%d')
