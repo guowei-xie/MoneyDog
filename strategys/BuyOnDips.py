@@ -9,9 +9,9 @@ from utils.data import get_stock_list_in_main_board, get_trade_calendar, get_dai
 from utils.logger import info, debug
 from utils.util import generate_minute_snapshot, get_elapsed_time_str, add_num_date_days
 from utils.broker import Broker
-from laboratory.multipleK import get_last_limit_day_kline, get_ma
+from laboratory.multipleK import get_last_limit_day_kline, get_ma, get_volume_change_rate, get_average_volume
 from laboratory.custom import is_limit_board_after_volume_consolidation
-from laboratory.singleK import get_limit_price
+from laboratory.singleK import get_limit_price, is_limit
 
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
@@ -23,7 +23,8 @@ class BuyOnDips:
         self.download_required = config.get('DOWNLOAD', 'download_required')
         self.backtest_start_time = config.get('BACKTEST', 'backtest_start_time')
         self.backtest_end_time = config.get('BACKTEST', 'backtest_end_time')
-
+        self.price_min = 5.0 # 价格区间选股：最低价格
+        self.price_max = 60.0 # 价格区间选股：最高价格
         self.broker = Broker()
 
     def run(self) -> bool:
@@ -131,11 +132,12 @@ class BuyOnDips:
         result = []
         for stock_code, daily_bar in daily_bars.items():
             if is_limit_board_after_volume_consolidation(stock_code, daily_bar):
-                result.append(stock_code)
+                if daily_bar.iloc[-1]['close'] >= self.price_min and daily_bar.iloc[-1]['close'] <= self.price_max:
+                    result.append(stock_code)
         info(f"获取自选股票列表（预买入）完成: {len(result)} 只股票")
         debug(f"自选股票列表: {result}")
         return result
-
+    
     def _get_holding_stock_list(self) -> list:
         """
         获取持仓股票列表（预卖出）
@@ -176,15 +178,24 @@ class BuyOnDips:
             else:
                 before_build_limit_day_kline = pd.DataFrame()
 
+            # 获取日成交量变化率
+            volume_change_rate = get_volume_change_rate(daily_bar)
+            # 获取日均成交量
+            average_volume = get_average_volume(daily_bar)
             # 缓存个股数据
             self.cached[stock_code] = {
                 'daily_bar': daily_bar, # 日K线数据
                 'limit_price_up': get_limit_price(stock_code, daily_bar.iloc[-1]['close'], 'up'), # 当日涨停价格
                 'limit_price_down': get_limit_price(stock_code, daily_bar.iloc[-1]['close'], 'down'), # 当日跌停价格
                 'day_ma4': get_ma(daily_bars=daily_bar, period=4), # 4日均价线
-                'day_ma19': get_ma(daily_bars=daily_bar, period=19), # 19日均价线
+                'day_ma9': get_ma(daily_bars=daily_bar, period=9), # 9日均价线
                 'build_date': build_date, # 建仓日期
-                'before_build_limit_day_kline': before_build_limit_day_kline # 建仓日前的涨停交易日K线数据
+                'cost_price': self.broker.get_position_cost_price(stock_code), # 持仓成本
+                'before_build_limit_day_kline': before_build_limit_day_kline, # 建仓日前的涨停交易日K线数据
+                'volume': daily_bar.iloc[-1]['volume'], # 昨日成交量
+                'volume_change_rate': volume_change_rate.iloc[-1]['volume_change_rate'], # 昨日成交量变化率
+                'average_volume': average_volume.iloc[-2]['average_volume'], # 前日日均成交量
+                'is_limit_up': is_limit(stock_code, daily_bar.iloc[-1]['close'], daily_bar.iloc[-1]['preClose'], 'up'), # 昨日是否涨停
             }
 
 
@@ -228,7 +239,9 @@ class BuyOnDips:
 
     def _buy_signal(self, stock_code: str, bars: pd.DataFrame) -> dict:
         """
-        买入信号
+        买入信号:
+        1. 动态ma5价格大于最低价（含误差）
+        2. 开盘价大于动态ma5价格
         Args:
             stock_code: 股票代码
             bars: 分时K线快照
@@ -240,41 +253,185 @@ class BuyOnDips:
             return None
 
         # 动态ma5 = (ma4 * 4 + 当前价 )/ 5
-        dynamic_ma5 = (self.cached[stock_code]['day_ma4'] * 4 + bars.iloc[-1]['close']) / 5
+        day_ma4 = self.cached[stock_code]['day_ma4']
+        dynamic_ma5 = (day_ma4 * 4 + bars.iloc[-1]['close']) / 5
 
-        # 误差
-        error = 0.002
-        if dynamic_ma5 >= bars.iloc[-1]['low'] * (1 - error):  
+        # 开盘价（即第一根K线开盘价）
+        open_price = bars.iloc[0]['open']
+
+        # 最低价（含误差）
+        error = 0.005
+        low_price = bars.iloc[-1]['low'] * (1 - error)
+
+        if dynamic_ma5 >= low_price and open_price >= dynamic_ma5:
+            
+            buy_price = bars.iloc[-1]['close']
             return {
                 'action': 'buy',
                 'stock_code': stock_code,
-                'price': dynamic_ma5,
+                'price': buy_price,
                 'volume': 100,
                 'time': bars.index[-1],
-                'desc': "动态ma5价格买入"
+                'desc': f"动态ma5价格买入",
+                'detail': f"动态ma5价格: {dynamic_ma5}, 最低价（含误差）: {low_price}, 开盘价: {open_price}, ma4: {day_ma4}"
             }
         return None
 
     def _sell_signal(self, stock_code: str, bars: pd.DataFrame) -> dict:
         """
-        卖出信号
+        卖出信号: 
+        1. 低于MA10价格
+        2. 昨日放量10%以上且高于近5日平均成交量
+        3. 昨日涨停
+        4. 今日上板失败
+        5. 分时MACD顶点
+        6. 分时炸板
+        (1 或 2 或 3 或 4) 且 5； 或 6
+
+        屏蔽信号：当前涨停，不卖出
         Args:
             stock_code: 股票代码
             bars: 分时K线快照
         Returns:
             dict: 卖出信号 {'action': 'sell', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time}
         """
-        # 测试：当第15分钟时，卖出信号
-        if len(bars) == 15:
+        # 屏蔽信号：当前涨停，不卖出
+        if self._shield_signal(stock_code, bars):
+            return None
+        
+        # 卖出信号1: 低于动态MA10价格
+        signal_1 = self._sell_signal_1(stock_code, bars)
+        signal_2 = self._sell_signal_2(stock_code, bars)
+        signal_3 = self._sell_signal_3(stock_code, bars)
+        signal_4 = self._sell_signal_4(stock_code, bars)
+        signal_5 = self._sell_signal_5(stock_code, bars)
+        signal_6 = self._sell_signal_6(stock_code, bars)
+
+        # 逻辑判断：(1 或 2 或 3 或 4) 且 5； 或 6
+        signals = [bool(signal_1), bool(signal_2), bool(signal_3), bool(signal_4), bool(signal_5), bool(signal_6)]
+        if (any(signals[:4]) and signals[4]) or signals[5]:
+            # 用0或1表示信号，例如101010，表示信号1、3、5符合
+            desc = f"卖出信号: {' '.join(['1' if x else '0' for x in signals])}"
+
             return {
                 'action': 'sell',
                 'stock_code': stock_code,
-                'price': bars.iloc[14]['close'],
+                'price': bars.iloc[-1]['close'],
                 'volume': 100,
-                'time': bars.index[14],
-                'desc': "15分钟时卖出"
+                'time': bars.index[-1],
+                'desc': desc
             }
         return None
+
+    def _sell_signal_1(self, stock_code: str, bars: pd.DataFrame) -> dict:
+        """
+        卖出信号1:
+        1. 低于动态MA10价格
+        Args:
+            stock_code: 股票代码
+            bars: 分时K线快照
+        Returns:
+            bool: 是否符合
+        """
+        day_ma9 = self.cached[stock_code]['day_ma9']
+        dynamic_ma10 = (day_ma9 * 9 + bars.iloc[-1]['close']) / 10
+        if bars.iloc[-1]['close'] < dynamic_ma10:
+            return True
+        return False
+    
+    def _sell_signal_2(self, stock_code: str, bars: pd.DataFrame) -> dict:
+        """
+        卖出信号2:
+        1. 昨日放量10%以上且高于近5日平均成交量
+        Args:
+            stock_code: 股票代码
+            bars: 分时K线快照
+        Returns:
+            bool: 是否符合
+        """
+        volume = self.cached[stock_code]['volume']
+        volume_change_rate = self.cached[stock_code]['volume_change_rate']
+        average_volume = self.cached[stock_code]['average_volume']
+        if volume_change_rate > 0.1 and volume > average_volume:
+            return True
+        return False
+    
+    def _sell_signal_3(self, stock_code: str, bars: pd.DataFrame) -> dict:
+        """
+        卖出信号3:
+        1. 昨日涨停
+        Args:
+            stock_code: 股票代码
+            bars: 分时K线快照
+        Returns:
+            bool: 是否符合
+        """
+        is_limit_up = self.cached[stock_code]['is_limit_up']
+        if is_limit_up:
+            return True
+        return False
+    
+    def _sell_signal_4(self, stock_code: str, bars: pd.DataFrame) -> dict:
+        """
+        卖出信号4:
+        1. 今日上板失败(即当日最高价大于9%，但最新价低于涨停价)
+        Args:
+            stock_code: 股票代码
+            bars: 分时K线快照
+        Returns:
+            bool: 是否符合
+        """
+        limit_price_up = self.cached[stock_code]['limit_price_up']
+        if bars['high'].max() >= limit_price_up * 1.09 and bars.iloc[-1]['close'] < limit_price_up:
+            return True
+        return False
+
+    def _sell_signal_5(self, stock_code: str, bars: pd.DataFrame) -> dict:
+        """
+        卖出信号5:
+        1. 分时MACD顶点
+        Args:
+            stock_code: 股票代码
+            bars: 分时K线快照
+        Returns:
+            bool: 是否符合
+        """
+
+        # 测试
+        if len(bars) == 235:
+            return True
+        return False
+
+    def _sell_signal_6(self, stock_code: str, bars: pd.DataFrame) -> bool:
+        """
+        卖出信号6:
+        1. 分时炸板（当前分钟K线开盘价等于涨停价，但最新价低于涨停价）
+        Args:
+            stock_code: 股票代码
+            bars: 分时K线快照
+        Returns:
+            bool: 是否符合
+        """
+        limit_price_up = self.cached[stock_code]['limit_price_up']
+        if bars.iloc[-1]['open'] >= limit_price_up and bars.iloc[-1]['close'] < limit_price_up:
+            return True
+        return False
+
+    # 屏蔽信号：当前涨停，不卖出
+    def _shield_signal(self, stock_code: str, bars: pd.DataFrame) -> bool:
+        """
+        屏蔽信号:
+        1. 当前涨停，不卖出
+        Args:
+            stock_code: 股票代码
+            bars: 分时K线快照
+        Returns:
+            bool: 是否符合
+        """
+        limit_price_up = self.cached[stock_code]['limit_price_up']
+        if bars.iloc[-1]['close'] >= limit_price_up:
+            return True
+        return False
 
     def trade(self, signal: dict) -> bool:
         """

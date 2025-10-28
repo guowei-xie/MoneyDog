@@ -66,11 +66,12 @@ def is_limit_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     limit_price = focused_bars.iloc[0]['close']
     lowest_price = focused_bars.iloc[1:]['low'].min()
     highest_price = focused_bars.iloc[1:]['high'].max()
-    if lowest_price / limit_price - 1 < -0.02 or highest_price / limit_price - 1 > 0.06:
+    if lowest_price / limit_price - 1 < -0.03 or highest_price / limit_price - 1 > 0.06:
         return False
 
-    # 判断是否符合条件7（日线收盘价不破涨停日价格）
-    if focused_bars.iloc[1:]['close'].min() < limit_price:
+    # 判断是否符合条件7（日线收盘价不破涨停日价格）,误差0.005
+    error = 0.005
+    if focused_bars.iloc[1:]['close'].min() < limit_price * (1 - error):
         return False
 
     # 判断是否符合条件8（今日收盘价格高于30日均线价格）
@@ -82,10 +83,10 @@ def is_limit_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     if not is_ma_bullish(daily_bars=daily_bars):
         return False
 
-    # 判断是否符合条件10（今日MACD柱大于昨日MACD柱））
-    macd_data = get_macd(daily_bars=daily_bars)
-    if macd_data.iloc[-1]['macd'] <= macd_data.iloc[-2]['macd']:
-        return False
+    # # 判断是否符合条件10（今日MACD柱大于昨日MACD柱））
+    # macd_data = get_macd(daily_bars=daily_bars)
+    # if macd_data.iloc[-1]['macd'] <= macd_data.iloc[-2]['macd']:
+    #     return False
     
     return True
 

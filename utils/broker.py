@@ -50,7 +50,7 @@ class Broker:
         self.available_amount -= cost_all
         # 记录交易
         self.record_transaction(stock_code, price, volume, action, price, commission, 0, time)
-        info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，时间: {time_str_to_datetime(time)}，描述: {desc}")
+        info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
         return True
@@ -86,7 +86,7 @@ class Broker:
         self.available_amount += total_cost - commission - tax
         # 记录交易
         self.record_transaction(stock_code, price, volume, action, price, commission, tax, time)
-        info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {total_cost}，佣金: {commission}，印花税: {tax}，时间: {time_str_to_datetime(time)}，描述: {desc}")
+        info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，印花税: {round(tax, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
         return True
@@ -283,6 +283,36 @@ class Broker:
                 if len(time_str) >= 8:
                     return time_str.replace('-', '').replace(':', '').replace(' ', '')[:8]
         return ''
+
+    def get_build_price(self, stock_code: str) -> float:
+        """
+        获取建仓价格
+        Args:
+            stock_code: 股票代码
+        Returns:
+            float: 建仓价格，未找到返回0.0
+        """
+        build_date = self.get_build_date(stock_code)
+        if not build_date:
+            return 0.0
+        for transaction in reversed(self.transactions):
+            if (transaction.get('stock_code') == stock_code 
+                and transaction.get('action') == 'buy' 
+                and str(transaction.get('time_str', '')).replace('-', '').replace(':', '').replace(' ', '')[:8] == build_date):
+                return transaction.get('price', 0.0)
+        return 0.0
+
+    # 获取个股持仓成本
+    def get_position_cost_price(self, stock_code: str) -> float:
+        """
+        获取个股持仓成本
+        Args:
+            stock_code: 股票代码
+        Returns:
+            float: 持仓成本，未找到返回0.0
+        """
+        return self.positions.get(stock_code, {}).get('cost_price', 0.0)
+
 
     # 下载交易记录至csv文件
     def download_transactions(self) -> bool:
