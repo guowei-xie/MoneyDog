@@ -9,7 +9,7 @@ from utils.data import get_stock_list_in_main_board, get_trade_calendar, get_dai
 from utils.logger import info, debug
 from utils.util import generate_minute_snapshot, get_elapsed_time_str, add_num_date_days
 from utils.broker import Broker
-from laboratory.multipleK import get_last_limit_day_kline, get_ma, get_volume_change_rate, get_average_volume
+from laboratory.multipleK import get_last_limit_day_kline, get_ma, get_volume_change_rate, get_average_volume, get_macd, is_macd_top
 from laboratory.custom import is_limit_board_after_volume_consolidation
 from laboratory.singleK import get_limit_price, is_limit
 
@@ -128,7 +128,7 @@ class BuyOnDips:
         Returns:
             list: 自选股票列表
         """
-        daily_bars = get_daily_bars(stock_list=self.global_stock_list, period="1d", end_time=trade_date, count=30)
+        daily_bars = get_daily_bars(stock_list=self.global_stock_list, period="1d", end_time=trade_date, count=90)
         result = []
         for stock_code, daily_bar in daily_bars.items():
             if is_limit_board_after_volume_consolidation(stock_code, daily_bar):
@@ -264,17 +264,21 @@ class BuyOnDips:
         low_price = bars.iloc[-1]['low'] * (1 - error)
 
         if dynamic_ma5 >= low_price and open_price >= dynamic_ma5:
-            
             buy_price = bars.iloc[-1]['close']
-            return {
-                'action': 'buy',
-                'stock_code': stock_code,
-                'price': buy_price,
-                'volume': 100,
-                'time': bars.index[-1],
-                'desc': f"动态ma5价格买入",
-                'detail': f"动态ma5价格: {dynamic_ma5}, 最低价（含误差）: {low_price}, 开盘价: {open_price}, ma4: {day_ma4}"
-            }
+            buy_volume = self.broker.get_buy_volume(buy_price)
+            if buy_volume > 0:
+                return {
+                    'action': 'buy',
+                    'stock_code': stock_code,
+                    'price': buy_price,
+                    'volume': buy_volume,
+                    'time': bars.index[-1],
+                    'desc': f"动态ma5价格买入",
+                    'detail': f"动态ma5价格: {dynamic_ma5}, 最低价（含误差）: {low_price}, 开盘价: {open_price}, ma4: {day_ma4}"
+                }
+            else:
+                info(f"可用资金不足，无法买入: {stock_code} 可用资金: {self.broker.available_amount}, 需求: {buy_price * buy_volume}")
+                return None
         return None
 
     def _sell_signal(self, stock_code: str, bars: pd.DataFrame) -> dict:
@@ -298,7 +302,12 @@ class BuyOnDips:
         # 屏蔽信号：当前涨停，不卖出
         if self._shield_signal(stock_code, bars):
             return None
-        
+
+        # 获取当前可用仓位，如果可用仓位为0，则无法卖出
+        available_volume = self.broker.get_available_volume(stock_code)
+        if available_volume <= 0:
+            return None
+
         # 卖出信号1: 低于动态MA10价格
         signal_1 = self._sell_signal_1(stock_code, bars)
         signal_2 = self._sell_signal_2(stock_code, bars)
@@ -311,19 +320,24 @@ class BuyOnDips:
         signals = [bool(signal_1), bool(signal_2), bool(signal_3), bool(signal_4), bool(signal_5), bool(signal_6)]
         if (any(signals[:4]) and signals[4]) or signals[5]:
             # 用0或1表示信号，例如101010，表示信号1、3、5符合
-            desc = f"卖出信号: {' '.join(['1' if x else '0' for x in signals])}"
-
-            return {
-                'action': 'sell',
-                'stock_code': stock_code,
-                'price': bars.iloc[-1]['close'],
-                'volume': 100,
-                'time': bars.index[-1],
-                'desc': desc
-            }
+            desc = f"卖出信号{' '.join(['1' if x else '0' for x in signals])}"
+            # 获取可卖出数量
+            sell_volume = self.broker.get_available_volume(stock_code)
+            if sell_volume > 0:
+                return {
+                    'action': 'sell',
+                    'stock_code': stock_code,
+                    'price': bars.iloc[-1]['close'],
+                    'volume': sell_volume,
+                    'time': bars.index[-1],
+                    'desc': desc
+                }
+            else:
+                info(f"可用仓位不足，无法卖出: {stock_code} 可用仓位: {sell_volume}")
+                return None
         return None
 
-    def _sell_signal_1(self, stock_code: str, bars: pd.DataFrame) -> dict:
+    def _sell_signal_1(self, stock_code: str, bars: pd.DataFrame) -> bool:
         """
         卖出信号1:
         1. 低于动态MA10价格
@@ -339,7 +353,7 @@ class BuyOnDips:
             return True
         return False
     
-    def _sell_signal_2(self, stock_code: str, bars: pd.DataFrame) -> dict:
+    def _sell_signal_2(self, stock_code: str, bars: pd.DataFrame) -> bool:
         """
         卖出信号2:
         1. 昨日放量10%以上且高于近5日平均成交量
@@ -356,7 +370,7 @@ class BuyOnDips:
             return True
         return False
     
-    def _sell_signal_3(self, stock_code: str, bars: pd.DataFrame) -> dict:
+    def _sell_signal_3(self, stock_code: str, bars: pd.DataFrame) -> bool:
         """
         卖出信号3:
         1. 昨日涨停
@@ -371,7 +385,7 @@ class BuyOnDips:
             return True
         return False
     
-    def _sell_signal_4(self, stock_code: str, bars: pd.DataFrame) -> dict:
+    def _sell_signal_4(self, stock_code: str, bars: pd.DataFrame) -> bool:
         """
         卖出信号4:
         1. 今日上板失败(即当日最高价大于9%，但最新价低于涨停价)
@@ -386,7 +400,7 @@ class BuyOnDips:
             return True
         return False
 
-    def _sell_signal_5(self, stock_code: str, bars: pd.DataFrame) -> dict:
+    def _sell_signal_5(self, stock_code: str, bars: pd.DataFrame) -> bool:
         """
         卖出信号5:
         1. 分时MACD顶点
@@ -396,9 +410,8 @@ class BuyOnDips:
         Returns:
             bool: 是否符合
         """
-
-        # 测试
-        if len(bars) == 235:
+        macd_data = get_macd(bars)
+        if is_macd_top(macd_data):
             return True
         return False
 
@@ -441,10 +454,10 @@ class BuyOnDips:
         Returns:
             bool: 是否成功
         """
-        if signal['action'] == 'buy':
-            self.broker.buy(signal)
-        elif signal['action'] == 'sell':
+        if signal['action'] == 'sell':
             self.broker.sell(signal)
+        elif signal['action'] == 'buy':
+            self.broker.buy(signal)
 
         return True
 

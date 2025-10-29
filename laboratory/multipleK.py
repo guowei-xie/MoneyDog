@@ -184,13 +184,13 @@ def get_macd(daily_bars: pd.DataFrame, fast_period: int = 12, slow_period: int =
     """
     计算MACD指标（DIF、DEA、MACD柱）
     
-    参数:
+    Args:
         daily_bars (pd.DataFrame): 包含每日行情数据的DataFrame，必须包含'close'列
         fast_period (int): 快线周期，默认12
         slow_period (int): 慢线周期，默认26
         signal_period (int): 信号线周期，默认9
         
-    返回:
+    Returns:
         pd.DataFrame: 包含原始数据和新增的MACD相关列的DataFrame
     """
     # 复制原始数据，避免修改原始DataFrame
@@ -207,9 +207,48 @@ def get_macd(daily_bars: pd.DataFrame, fast_period: int = 12, slow_period: int =
     df['dea'] = df['dif'].ewm(span=signal_period, adjust=False).mean()
     
     # 计算MACD柱（Histogram）
-    df['macd'] = df['dif'] - df['dea']
+    df['macd'] = 2 * (df['dif'] - df['dea'])
     
     # 删除临时计算的EMA列（可选）
     df.drop(['ema_fast', 'ema_slow'], axis=1, inplace=True)
     
     return df
+
+def is_macd_top(macd_data: pd.DataFrame) -> bool:
+    """
+    判断MACD柱是否见顶
+    
+    Args:
+        macd_data: 包含MACD列的行情数据
+        
+    Returns:
+        bool: MACD柱见顶返回True，否则返回False
+    """
+    # 检查数据量是否足够
+    if len(macd_data) < 4:
+        return False
+    
+    # 获取最近四根MACD柱值
+    m1, m2, m3, m4 = macd_data['macd'].iloc[-1:-5:-1]
+    
+    # 判断是否满足见顶条件：m1 < m2 < m3 > m4
+    return m1 < m2 < m3 > m4 and m1 > 0 and m2 > 0 and m3 > 0 and m4 > 0
+
+def is_macd_bottom(macd_data: pd.DataFrame) -> bool:
+    """
+    判断MACD柱是否见底
+    MACD柱见底定义：T0为当前分钟，T-1分钟MACD绿柱短于T-2分钟MACD绿柱，且T-2分钟MACD绿柱短于T-3分钟MACD绿柱，但T-3分钟MACD绿柱长于T-4分钟MACD绿柱。
+    
+    Args:
+        macd_data: 包含MACD列的行情数据
+    Returns:
+        bool: MACD柱见底返回True，否则返回False
+    """
+    if len(macd_data) < 5:
+        return False
+    
+    # 获取最近五根MACD柱值  
+    m1, m2, m3, m4, m5 = macd_data['macd'].iloc[-1:-6:-1]
+    
+    # 判断是否满足见底条件：m1 < m2 < m3 < m4 < m5
+    return m1 > m2 > m3 > m4 < m5 and m1 < 0 and m2 < 0 and m3 < 0 and m4 < 0 and m5 < 0

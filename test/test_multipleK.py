@@ -114,6 +114,6 @@ if __name__ == '__main__':
     # test_get_last_limit_day()
     # test_get_daily_bars_by_date()
     # test_get_ma()
-    # test_get_macd()
+    test_get_macd()
     # test_get_volume_change_rate()
-    test_get_average_volume()
+    # test_get_average_volume()

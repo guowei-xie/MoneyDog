@@ -91,6 +91,42 @@ class Broker:
         debug(f"当前持仓: {self.positions}")
         return True
 
+    # 单股买入数量
+    def get_buy_volume(self, price: float) -> int:
+        """
+        获取单股买入数量（根据仓位管理配置计算单股最大买入数量）
+        Args:
+            price: 买入价格
+        Returns:
+            int: 单股买入数量（100的整数倍，且不超过可用资金所能买入的数量）
+        """
+        # 获取仓位管理配置
+        limit_vol_type = config.get('BACKTEST', 'limit_vol_type')
+        max_vol_rate = config.getfloat('BACKTEST', 'max_vol_rate')
+        max_vol_amount = config.getfloat('BACKTEST', 'max_vol_amount')
+
+        # 可能的最大买入资金（不能超过可用资金）
+        max_affordable_volume = int(self.available_amount / price // 100 * 100)
+
+        # 根据仓位管理配置计算单股最大买入数量，并向下取100的整数倍
+        if limit_vol_type == 'ratio':
+            total_amount = self.available_amount + self.get_position_value()
+            calc_volume = int((total_amount * max_vol_rate) // price // 100 * 100)
+        elif limit_vol_type == 'amount':
+            calc_volume = int(max_vol_amount // price // 100 * 100)
+        else:
+            # 默认回退行为，不买入
+            error(f"仓位管理配置错误，不买入: limit_vol_type: {limit_vol_type}, max_vol_rate: {max_vol_rate}, max_vol_amount: {max_vol_amount}")
+            calc_volume = 0
+
+        # 不能超过可用资金所能买入的数量
+        buy_volume = min(calc_volume, max_affordable_volume)
+        
+        if buy_volume >= 100:
+            return buy_volume
+        else:
+            return 0
+        
     def get_position(self, stock_code: str) -> dict:
         """
         获取持仓信息
@@ -184,7 +220,7 @@ class Broker:
 
     def get_position_value(self) -> float:
         """
-        获取持仓价值
+        获取持仓总价值
         Returns:
             float: 持仓价值
         """
