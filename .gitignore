@@ -123,9 +123,15 @@ results/
 # config.ini  # 如果包含敏感信息，取消注释此行
 
 # 第三方库文件（xtquant相关）
+# 为保证xtquant目录下的相关文件不被忽略，取消对该目录的忽略
 # xtquant/
 *.dll
 *.pyd
+
+# 不忽略xtquant下的相关文件
+!xtquant/
+!xtquant/*.dll
+!xtquant/*.pyd
 
 # 临时文件
 *.tmp
