@@ -34,7 +34,8 @@ class BuyOnDips:
             bool: 是否成功
         """
         self.prepare()
-        for trade_date in self.trade_calendar:
+        # 遍历交易日历，逐日运行（最后一天不运行）
+        for trade_date in self.trade_calendar[:-1]:
             proceed = self.before_open(trade_date)
             if proceed:
                 for minute_snapshot in self.minute_snapshots:
@@ -92,7 +93,7 @@ class BuyOnDips:
         Returns:
             bool: 是否成功
         """
-        info(f"策略开盘前运行: 【{add_num_date_days(trade_date, 1)}】")
+        info(f"策略开盘前运行: 【{add_num_date_days(trade_date, 1, self.trade_calendar)}】")
         # 资产概览
         info(f"可用资金: {self.broker.available_amount:,.2f} 元，持仓价值: {self.broker.get_position_value():,.2f} 元，总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%")
         # 盘前清除volume为0的持仓股票信息、解锁昨日所有被锁定的持仓
@@ -116,7 +117,7 @@ class BuyOnDips:
         self._set_cached(trade_date)
 
         # 4. 获取当日股池的分时线行情数据，并模拟生成分时快照
-        self.minute_snapshots = self._simulate_minute_daily(add_num_date_days(trade_date, 1) )
+        self.minute_snapshots = self._simulate_minute_daily(add_num_date_days(trade_date, 1, self.trade_calendar))
         
         return True
 

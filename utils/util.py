@@ -105,13 +105,13 @@ def generate_minute_snapshot(daily_bars: dict) -> list:
     """
     # 1. 所有股票的所有index（分钟时间戳）集合
     all_minute_set = set()
-    for df in daily_bars.values():
+    for stock_code, df in daily_bars.items():
         if len(df) > 0:
             # 支持index为datetime或str
             idx = df.index.astype(str)
             all_minute_set |= set(idx)
         else:
-            warning(f"股票{stock_code}的分时K线数据为空")
+            warning(f"股票 {stock_code} 的分时K线数据为空")
     if not all_minute_set:
         return []
 
@@ -173,18 +173,23 @@ def time_str_to_datetime(time_str: str) -> str:
     """
     return pd.to_datetime(time_str, format='%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
 
-#  数字日期加减天数，返回数字日期，例如 20250909 加1天，返回 20250910，减1天，返回 20250908
-def add_num_date_days(date_str: str, days: int) -> str:
+#  基于交易日历，向前或向后推移天数，返回数字日期
+def add_num_date_days(date_str: str, days: int, trade_calendar: list) -> str:
     """
-    数字日期加减天数，返回数字日期
+    基于交易日历，向前或向后推移天数，返回数字日期
     Args:
         date_str: 日期字符串，格式为'YYYYMMDD'
-        days: 天数
+        days: 天数，正数表示向未来推移，负数表示向过去推移
+        trade_calendar: 交易日历列表，元素为'YYYYMMDD'字符串（需升序排列）
     Returns:
         str: 日期字符串，格式为'YYYYMMDD'
     """
-    # 检查date_str格式和长度，确保为8位数字
-    if not (isinstance(date_str, str) and len(date_str) == 8 and date_str.isdigit()):
-        raise ValueError(f"date_str必须为8位数字字符串，实际为: {date_str}")
-    new_date = pd.to_datetime(date_str, format='%Y%m%d') + pd.Timedelta(days=days)
-    return new_date.strftime('%Y%m%d')
+    # 检查trade_calendar非空且date_str在trade_calendar
+    if not trade_calendar or date_str not in trade_calendar:
+        raise ValueError(f"交易日历为空或未包含日期: {date_str}")
+    idx = trade_calendar.index(date_str)
+    target_idx = idx + days
+    # 合理的边界检查，0<=target_idx<len(trade_calendar)
+    if target_idx < 0 or target_idx >= len(trade_calendar):
+        raise IndexError(f"日期推移超出交易日历范围: {date_str} + {days}")
+    return trade_calendar[target_idx]
