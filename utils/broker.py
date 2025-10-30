@@ -7,6 +7,8 @@ import pandas as pd
 from datetime import datetime
 from utils.util import time_str_to_datetime
 import matplotlib.pyplot as plt
+import os
+
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
 
@@ -111,9 +113,9 @@ class Broker:
         # 根据仓位管理配置计算单股最大买入数量，并向下取100的整数倍
         if limit_vol_type == 'ratio':
             total_amount = self.available_amount + self.get_position_value()
-            calc_volume = int((total_amount * max_vol_rate) // price // 100 * 100)
+            calc_volume = int((total_amount * max_vol_rate) / price // 100 * 100)
         elif limit_vol_type == 'amount':
-            calc_volume = int(max_vol_amount // price // 100 * 100)
+            calc_volume = int(max_vol_amount / price // 100 * 100)
         else:
             # 默认回退行为，不买入
             error(f"仓位管理配置错误，不买入: limit_vol_type: {limit_vol_type}, max_vol_rate: {max_vol_rate}, max_vol_amount: {max_vol_amount}")
@@ -207,7 +209,11 @@ class Broker:
             if stock_snapshot:
                 bars = stock_snapshot['bars']
                 if not bars.empty:
-                    self.positions[stock_code]['last_price'] = bars.iloc[-1]['close']
+                    last_price = bars.iloc[-1]['close']
+                    # last_price可能为NaN，此时不更新
+                    if not pd.isna(last_price):
+                        self.positions[stock_code]['last_price'] = last_price
+                        debug(f"更新持仓最新价格: {stock_code}，价格: {last_price}")
         return True
 
     def get_position_cost(self) -> float:
@@ -358,12 +364,18 @@ class Broker:
         Returns:
             bool: 是否成功
         """
+        # 保证results目录存在
+        results_dir = "results"
+        if not os.path.exists(results_dir):
+            os.makedirs(results_dir)
+
+        filename = f'{results_dir}/results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
         df_transactions = pd.DataFrame(self.transactions)
         df_position_and_account_changes = pd.DataFrame(self.position_and_account_changes)
-        with pd.ExcelWriter(f'results/results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx') as writer:
+        with pd.ExcelWriter(filename) as writer:
             df_transactions.to_excel(writer, sheet_name='交易记录', index=False)
             df_position_and_account_changes.to_excel(writer, sheet_name='持仓变动记录', index=False)
-        info(f"下载交易记录与持仓变动记录至csv文件完成- results/results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx")
+        info(f"下载交易记录与持仓变动记录至csv文件完成- {filename}")
         return True
 
     # 分析结果

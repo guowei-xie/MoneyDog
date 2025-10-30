@@ -4,7 +4,7 @@
 """
 
 import pandas as pd
-from utils.logger import error
+from utils.logger import error, warning
 import time
 
 def date_str_to_num_str(date_str: str) -> str:
@@ -110,6 +110,8 @@ def generate_minute_snapshot(daily_bars: dict) -> list:
             # 支持index为datetime或str
             idx = df.index.astype(str)
             all_minute_set |= set(idx)
+        else:
+            warning(f"股票{stock_code}的分时K线数据为空")
     if not all_minute_set:
         return []
 
