@@ -18,5 +18,14 @@ def test_download_stock_history_data():
     download_stock_history_data(stock_list, start_time="20200101", end_time="20251030", period="1d")
     download_stock_history_data(stock_list, start_time="20200101", end_time="20251030", period="1m")
 
+# 测试下载某日分时K线数据
+def test_download_stock_history_data_by_day():
+    """
+    测试下载某日分时K线数据
+    """
+    stock_list = ['003007.SZ']
+    download_stock_history_data(stock_list, start_time="20240118", end_time="20240118", period="1m")
+
 if __name__ == "__main__":
-    test_download_stock_history_data()
+    # test_download_stock_history_data()
+    test_download_stock_history_data_by_day()

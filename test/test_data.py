@@ -30,21 +30,26 @@ def test_get_daily_bars():
     """
     测试获取K线数据
     """
-    stock_list = ['000001.SZ', '000002.SZ']
-    # 测试获取日K线数据
-    daily_bars = get_daily_bars(stock_list, "1d", "20250101", "", count=-1)
-    for stock_code, daily_bar in daily_bars.items():
-        print(stock_code)
-        print(daily_bar)
-        print('-'*100)
+    # stock_list = ['000001.SZ', '000002.SZ']
+    # # 测试获取日K线数据
+    # daily_bars = get_daily_bars(stock_list, "1d", "20250101", "", count=-1)
+    # for stock_code, daily_bar in daily_bars.items():
+    #     print(stock_code)
+    #     print(daily_bar)
+    #     print('-'*100)
 
-    # 测试获取分时K线数据
-    stock_list = ['603102.SH', '603615.SH']
-    daily_bars = get_daily_bars(stock_list, "1m", "20250101", "", count=-1)
-    for stock_code, daily_bar in daily_bars.items():
-        print(stock_code)
-        print(daily_bar)
-        print('-'*100)
+    # # 测试获取分时K线数据
+    # stock_list = ['603102.SH', '603615.SH']
+    # daily_bars = get_daily_bars(stock_list, "1m", "20250101", "", count=-1)
+    # for stock_code, daily_bar in daily_bars.items():
+    #     print(stock_code)
+    #     print(daily_bar)
+    #     print('-'*100)
+
+    # 测试某日分时K线数据
+    daily_bars = get_daily_bars(stock_list=['003007.SZ'], period='1m', start_time='20240118', end_time='20250118', count=-1)
+    daily_bars = daily_bars['003007.SZ']
+    print(daily_bars)
 
 if __name__ == "__main__":
     # test_get_trade_calendar()

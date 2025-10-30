@@ -256,6 +256,9 @@ class BuyOnDips:
         # 动态ma5 = (ma4 * 4 + 当前价 )/ 5
         day_ma4 = self.cached[stock_code]['day_ma4']
         dynamic_ma5 = (day_ma4 * 4 + bars.iloc[-1]['close']) / 5
+        # 动态ma10 = (ma9 * 9 + 当前价 )/ 10
+        day_ma9 = self.cached[stock_code]['day_ma9']
+        dynamic_ma10 = (day_ma9 * 9 + bars.iloc[-1]['close']) / 10
 
         # 开盘价（即第一根K线开盘价）
         open_price = bars.iloc[0]['open']
@@ -264,9 +267,13 @@ class BuyOnDips:
         error = 0.005
         low_price = bars.iloc[-1]['low'] * (1 - error)
 
-        if dynamic_ma5 >= low_price and open_price >= dynamic_ma5:
+        signal_1 = dynamic_ma5 >= low_price and open_price >= dynamic_ma5
+        signal_2 = dynamic_ma10 >= low_price and open_price >= dynamic_ma10 and open_price < dynamic_ma5
+
+        if signal_1 or signal_2:
             buy_price = bars.iloc[-1]['close']
             buy_volume = self.broker.get_buy_volume(buy_price)
+
             if buy_volume > 0:
                 return {
                     'action': 'buy',
