@@ -120,7 +120,7 @@ data/
 results/
 
 # 配置文件（可能包含敏感信息）
-# config.ini  # 如果包含敏感信息，取消注释此行
+config.ini  
 
 # 第三方库文件（xtquant相关）
 # 为保证xtquant目录下的相关文件不被忽略，取消对该目录的忽略

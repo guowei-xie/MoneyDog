@@ -178,6 +178,9 @@ class BuyOnDips:
                 before_build_limit_day_kline = get_last_limit_day_kline(stock_code, daily_bar.loc[:build_date], 5)
             else:
                 before_build_limit_day_kline = pd.DataFrame()
+            
+            # 获取最近5天内的最后一次涨停日K线
+            last_limit_day_kline = get_last_limit_day_kline(stock_code, daily_bar, 5)
 
             # 获取日成交量变化率
             volume_change_rate = get_volume_change_rate(daily_bar)
@@ -192,7 +195,8 @@ class BuyOnDips:
                 'day_ma9': get_ma(daily_bars=daily_bar, period=9), # 9日均价线
                 'build_date': build_date, # 建仓日期
                 'cost_price': self.broker.get_position_cost_price(stock_code), # 持仓成本
-                'before_build_limit_day_kline': before_build_limit_day_kline, # 建仓日前的涨停交易日K线数据
+                'before_build_limit_day_kline': before_build_limit_day_kline, # 已建仓票的建仓日前的涨停交易日K线数据
+                'last_limit_day_kline': last_limit_day_kline, # 最近5天内的最后一次涨停日K线数据
                 'volume': daily_bar.iloc[-1]['volume'], # 昨日成交量
                 'volume_change_rate': volume_change_rate.iloc[-1]['volume_change_rate'], # 昨日成交量变化率
                 'average_volume': average_volume.iloc[-2]['average_volume'], # 前日日均成交量
@@ -259,9 +263,14 @@ class BuyOnDips:
         # 动态ma10 = (ma9 * 9 + 当前价 )/ 10
         day_ma9 = self.cached[stock_code]['day_ma9']
         dynamic_ma10 = (day_ma9 * 9 + bars.iloc[-1]['close']) / 10
-
+        # 获取最近5天内的最后一次涨停日收盘价
+        last_limit_day_close_price = self.cached[stock_code]['last_limit_day_kline'].iloc[-1]['close']
         # 开盘价（即第一根K线开盘价）
         open_price = bars.iloc[0]['open']
+        # 历史K线数据
+        history_kline = self.cached[stock_code]['daily_bar']
+        # 最新日收盘价
+        latest_close_price = history_kline.iloc[-1]['close']
 
         # 最低价（含误差）
         error = 0.005
@@ -269,8 +278,9 @@ class BuyOnDips:
 
         signal_1 = dynamic_ma5 >= low_price and open_price >= dynamic_ma5
         signal_2 = dynamic_ma10 >= low_price and open_price >= dynamic_ma10 and open_price < dynamic_ma5
+        signal_3 = last_limit_day_close_price >= low_price and open_price > last_limit_day_close_price * 1.01 and open_price >= latest_close_price  # 比最近涨停价高1%,且相对昨日高开，且不低于最新日收盘价
 
-        if signal_1 or signal_2:
+        if signal_1 or signal_2 or signal_3:
             buy_price = bars.iloc[-1]['close']
             buy_volume = self.broker.get_buy_volume(buy_price)
 
@@ -281,8 +291,7 @@ class BuyOnDips:
                     'price': buy_price,
                     'volume': buy_volume,
                     'time': bars.index[-1],
-                    'desc': f"动态ma5价格买入",
-                    'detail': f"动态ma5价格: {dynamic_ma5}, 最低价（含误差）: {low_price}, 开盘价: {open_price}, ma4: {day_ma4}"
+                    'desc': f"买入信号{' '.join(['1' if x else '0' for x in [signal_1, signal_2, signal_3]])}"
                 }
             else:
                 info(f"可用资金不足，无法买入: {stock_code} 可用资金: {self.broker.available_amount}, 需求: {buy_price * buy_volume}")
