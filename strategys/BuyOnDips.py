@@ -12,6 +12,7 @@ from utils.broker import Broker
 from laboratory.multipleK import get_last_limit_day_kline, get_ma, get_volume_change_rate, get_average_volume, get_macd, is_macd_top
 from laboratory.custom import is_limit_board_after_volume_consolidation
 from laboratory.singleK import get_limit_price, is_limit
+from laboratory.analyze import analyze_buy_and_sell_record
 
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
@@ -278,9 +279,9 @@ class BuyOnDips:
 
         signal_1 = dynamic_ma5 >= low_price and open_price >= dynamic_ma5
         signal_2 = dynamic_ma10 >= low_price and open_price >= dynamic_ma10 and open_price < dynamic_ma5
-        signal_3 = last_limit_day_close_price >= low_price and open_price > last_limit_day_close_price * 1.01 and open_price >= latest_close_price  # 比最近涨停价高1%,且相对昨日高开，且不低于最新日收盘价
+        # signal_3 = last_limit_day_close_price >= low_price and open_price > last_limit_day_close_price * 1.01 and open_price >= latest_close_price  # 比最近涨停价高1%,且相对昨日高开，且不低于最新日收盘价
 
-        if signal_1 or signal_2 or signal_3:
+        if signal_1 or signal_2:
             buy_price = bars.iloc[-1]['close']
             buy_volume = self.broker.get_buy_volume(buy_price)
 
@@ -291,7 +292,7 @@ class BuyOnDips:
                     'price': buy_price,
                     'volume': buy_volume,
                     'time': bars.index[-1],
-                    'desc': f"买入信号{' '.join(['1' if x else '0' for x in [signal_1, signal_2, signal_3]])}"
+                    'desc': f"买入信号{' '.join(['1' if x else '0' for x in [signal_1, signal_2]])}"
                 }
             else:
                 info(f"可用资金不足，无法买入: {stock_code} 可用资金: {self.broker.available_amount}, 需求: {buy_price * buy_volume}")
@@ -503,6 +504,6 @@ class BuyOnDips:
             bool: 是否成功
         """
         self.broker.download_transactions()
-        self.broker.analyze_result()
+        analyze_buy_and_sell_record(transactions=self.broker.transactions)
         info(f"回测结束，运行耗时: {get_elapsed_time_str(self.start_time)}")
         return True

@@ -136,7 +136,6 @@ def generate_minute_snapshot(daily_bars: dict) -> list:
         snapshots.append({'minute': minute, 'snapshot': snap})
     return snapshots
 
-
 def get_date_interval(date1: str, date2: str) -> int:
     """
     计算两个数字格式日期的间隔天数
@@ -173,7 +172,6 @@ def time_str_to_datetime(time_str: str) -> str:
     """
     return pd.to_datetime(time_str, format='%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
 
-#  基于交易日历，向前或向后推移天数，返回数字日期
 def add_num_date_days(date_str: str, days: int, trade_calendar: list) -> str:
     """
     基于交易日历，向前或向后推移天数，返回数字日期
@@ -193,3 +191,20 @@ def add_num_date_days(date_str: str, days: int, trade_calendar: list) -> str:
     if target_idx < 0 or target_idx >= len(trade_calendar):
         raise IndexError(f"日期推移超出交易日历范围: {date_str} + {days}")
     return trade_calendar[target_idx]
+
+# 基于交易日历，计算两个日期间的交易日数
+def get_trade_days_interval(date1: str, date2: str, trade_calendar: list) -> int:
+    """
+    基于交易日历，计算两个日期间的交易日数（包含date1但不包含date2）
+    Args:
+        date1: 日期1，格式为'YYYYMMDD'
+        date2: 日期2，格式为'YYYYMMDD'
+        trade_calendar: 交易日历列表，元素为'YYYYMMDD'字符串（需升序排列）
+    Returns:
+        int: 交易日数（date1到date2之间的天数，如果date1==date2，返回0，若date2在date1之后返回正数，否则返回负数）
+    """
+    if date1 not in trade_calendar or date2 not in trade_calendar:
+        raise ValueError(f"日期不在交易日历范围内: {date1} 或 {date2}")
+    idx1 = trade_calendar.index(date1)
+    idx2 = trade_calendar.index(date2)
+    return idx2 - idx1

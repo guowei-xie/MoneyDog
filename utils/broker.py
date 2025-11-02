@@ -51,7 +51,7 @@ class Broker:
         # 更新可用资金
         self.available_amount -= cost_all
         # 记录交易
-        self.record_transaction(stock_code, price, volume, action, price, commission, 0, time)
+        self.record_transaction(stock_code, price, volume, action, price, commission, 0, time, desc)
         info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
@@ -87,7 +87,7 @@ class Broker:
         # 更新可用资金
         self.available_amount += total_cost - commission - tax
         # 记录交易
-        self.record_transaction(stock_code, price, volume, action, price, commission, tax, time)
+        self.record_transaction(stock_code, price, volume, action, price, commission, tax, time, desc)
         info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，印花税: {round(tax, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
@@ -248,7 +248,7 @@ class Broker:
         """
         return (self.get_total_assets() / self.initial_amount - 1) * 100
 
-    def record_transaction(self, stock_code: str, price: float, volume: int, action: str, cost_price: float, commission: float, tax: float, time: str) -> bool:
+    def record_transaction(self, stock_code: str, price: float, volume: int, action: str, cost_price: float, commission: float, tax: float, time: str, desc: str = "") -> bool:
         """
         记录每笔交易
         Args:
@@ -260,6 +260,7 @@ class Broker:
             commission: 佣金
             tax: 印花税
             time: 交易时间
+            desc: 描述
         Returns:
             bool: 是否成功
         """
@@ -272,7 +273,8 @@ class Broker:
             'commission': commission,
             'tax': tax,
             'time': time,
-            'time_str': time_str_to_datetime(time)
+            'time_str': time_str_to_datetime(time),
+            'desc': desc
         })
         return True
      
@@ -378,104 +380,104 @@ class Broker:
         info(f"下载交易记录与持仓变动记录至csv文件完成- {filename}")
         return True
 
-    # 分析结果
-    def analyze_result(self) -> bool:
-        """
-        分析结果，包括真正的最大回撤计算，并增加最大持仓股票数与平均持仓天数计算
-        Returns:
-            bool: 是否成功
-        """
-        try:
-            total_position_value = self.get_position_value()
-            total_assets = self.get_total_assets()
-            total_return = self.get_total_profit_rate()
+    # # 分析结果
+    # def analyze_result(self) -> bool:
+    #     """
+    #     分析结果，包括真正的最大回撤计算，并增加最大持仓股票数与平均持仓天数计算
+    #     Returns:
+    #         bool: 是否成功
+    #     """
+    #     try:
+    #         total_position_value = self.get_position_value()
+    #         total_assets = self.get_total_assets()
+    #         total_return = self.get_total_profit_rate()
 
-            # 1. 统计交易次数及成本
-            total_trades = len(self.transactions)
-            total_commission = sum(t.get('commission', 0) for t in self.transactions)
-            total_tax = sum(t.get('tax', 0) for t in self.transactions)
-            total_costs = total_commission + total_tax
-            stock_count_list = [x['stock_count'] for x in self.position_and_account_changes] if self.position_and_account_changes else []
-            max_position_count = max(stock_count_list) if stock_count_list else 0
+    #         # 1. 统计交易次数及成本
+    #         total_trades = len(self.transactions)
+    #         total_commission = sum(t.get('commission', 0) for t in self.transactions)
+    #         total_tax = sum(t.get('tax', 0) for t in self.transactions)
+    #         total_costs = total_commission + total_tax
+    #         stock_count_list = [x['stock_count'] for x in self.position_and_account_changes] if self.position_and_account_changes else []
+    #         max_position_count = max(stock_count_list) if stock_count_list else 0
 
-            # 2. 个股闭环盈亏统计
-            df = pd.DataFrame(self.transactions)
-            stock_perf = {}
-            if not df.empty:
-                for code, trades in df.groupby('stock_code'):
-                    buys = trades[trades['action'] == 'buy']
-                    sells = trades[trades['action'] == 'sell']
-                    if not buys.empty and not sells.empty:
-                        buy_amt = (buys['price'] * buys['volume']).sum()
-                        buy_comm = buys['commission'].sum() if 'commission' in buys else 0
-                        buy_cost = buy_amt + buy_comm
-                        sell_amt = (sells['price'] * sells['volume']).sum()
-                        sell_comm = sells['commission'].sum() if 'commission' in sells else 0
-                        sell_tax = sells['tax'].sum() if 'tax' in sells else 0
-                        sell_income = sell_amt - sell_comm - sell_tax
-                        pl = sell_income - buy_cost
-                        rr = (pl / buy_cost) * 100 if buy_cost != 0 else 0
-                        stock_perf[code] = dict(return_rate=rr, buy_cost=buy_cost, sell_income=sell_income, profit_loss=pl)
+    #         # 2. 个股闭环盈亏统计
+    #         df = pd.DataFrame(self.transactions)
+    #         stock_perf = {}
+    #         if not df.empty:
+    #             for code, trades in df.groupby('stock_code'):
+    #                 buys = trades[trades['action'] == 'buy']
+    #                 sells = trades[trades['action'] == 'sell']
+    #                 if not buys.empty and not sells.empty:
+    #                     buy_amt = (buys['price'] * buys['volume']).sum()
+    #                     buy_comm = buys['commission'].sum() if 'commission' in buys else 0
+    #                     buy_cost = buy_amt + buy_comm
+    #                     sell_amt = (sells['price'] * sells['volume']).sum()
+    #                     sell_comm = sells['commission'].sum() if 'commission' in sells else 0
+    #                     sell_tax = sells['tax'].sum() if 'tax' in sells else 0
+    #                     sell_income = sell_amt - sell_comm - sell_tax
+    #                     pl = sell_income - buy_cost
+    #                     rr = (pl / buy_cost) * 100 if buy_cost != 0 else 0
+    #                     stock_perf[code] = dict(return_rate=rr, buy_cost=buy_cost, sell_income=sell_income, profit_loss=pl)
 
-            completed = list(stock_perf.values())
-            total_completed = len(completed)
-            win_rates = [x['return_rate'] for x in completed if x['return_rate'] > 0]
-            loss_rates = [x['return_rate'] for x in completed if x['return_rate'] < 0]
-            win_rate = (len(win_rates) / total_completed * 100) if total_completed else 0
-            avg_profit_rate = sum(win_rates) / len(win_rates) if win_rates else 0
-            avg_loss_rate = sum(loss_rates) / len(loss_rates) if loss_rates else 0
+    #         completed = list(stock_perf.values())
+    #         total_completed = len(completed)
+    #         win_rates = [x['return_rate'] for x in completed if x['return_rate'] > 0]
+    #         loss_rates = [x['return_rate'] for x in completed if x['return_rate'] < 0]
+    #         win_rate = (len(win_rates) / total_completed * 100) if total_completed else 0
+    #         avg_profit_rate = sum(win_rates) / len(win_rates) if win_rates else 0
+    #         avg_loss_rate = sum(loss_rates) / len(loss_rates) if loss_rates else 0
 
-            # 3. 计算历史资产曲线最大回撤（真实最大回撤）
-            max_assets = -float('inf')
-            max_drawdown = 0.0
-            # 获取资产曲线（按日期排序）
-            if self.position_and_account_changes:
-                df_pac = pd.DataFrame(self.position_and_account_changes)
-                df_pac = df_pac.sort_values('trade_date')
-                asset_curve = df_pac['total_assets'].tolist()
-                if asset_curve:
-                    peak = asset_curve[0]
-                    max_dd = 0.0
-                    for v in asset_curve:
-                        if v > peak:
-                            peak = v
-                        dd = (peak - v) / peak if peak != 0 else 0
-                        if dd > max_dd:
-                            max_dd = dd
-                    max_drawdown = max_dd * 100
-                else:
-                    max_drawdown = 0.0
-            else:
-                max_drawdown = 0.0
+    #         # 3. 计算历史资产曲线最大回撤（真实最大回撤）
+    #         max_assets = -float('inf')
+    #         max_drawdown = 0.0
+    #         # 获取资产曲线（按日期排序）
+    #         if self.position_and_account_changes:
+    #             df_pac = pd.DataFrame(self.position_and_account_changes)
+    #             df_pac = df_pac.sort_values('trade_date')
+    #             asset_curve = df_pac['total_assets'].tolist()
+    #             if asset_curve:
+    #                 peak = asset_curve[0]
+    #                 max_dd = 0.0
+    #                 for v in asset_curve:
+    #                     if v > peak:
+    #                         peak = v
+    #                     dd = (peak - v) / peak if peak != 0 else 0
+    #                     if dd > max_dd:
+    #                         max_dd = dd
+    #                 max_drawdown = max_dd * 100
+    #             else:
+    #                 max_drawdown = 0.0
+    #         else:
+    #             max_drawdown = 0.0
 
-            # 4. 输出分析
-            info("=" * 100)
-            info("回测分析结果")
-            info("=" * 100)
-            info(f"初始资金: {self.initial_amount:,.2f} 元")
-            info(f"当前可用资金: {self.available_amount:,.2f} 元")
-            info(f"持仓价值(成本价估算): {total_position_value:,.2f} 元")
-            info(f"总资产: {total_assets:,.2f} 元")
-            info(f"总盈利: {total_return:.2f}%")
-            info(f"总交易次数: {total_trades}")
-            info(f"完成交易股票数: {total_completed}")
-            info(f"胜率: {win_rate:.2f}%")
-            info(f"平均盈利率: {avg_profit_rate:.2f}%")
-            info(f"平均亏损率: {avg_loss_rate:.2f}%")
-            info(f"最大回撤: {max_drawdown:.2f}%")
-            info(f"最大持仓股票数: {max_position_count}")
-            info(f"总手续费: {total_commission:,.2f} 元")
-            info(f"总印花税: {total_tax:,.2f} 元")
-            info(f"总交易成本: {total_costs:,.2f} 元")
-            info("=" * 100)
+    #         # 4. 输出分析
+    #         info("=" * 100)
+    #         info("回测分析结果")
+    #         info("=" * 100)
+    #         info(f"初始资金: {self.initial_amount:,.2f} 元")
+    #         info(f"当前可用资金: {self.available_amount:,.2f} 元")
+    #         info(f"持仓价值(成本价估算): {total_position_value:,.2f} 元")
+    #         info(f"总资产: {total_assets:,.2f} 元")
+    #         info(f"总盈利: {total_return:.2f}%")
+    #         info(f"总交易次数: {total_trades}")
+    #         info(f"完成交易股票数: {total_completed}")
+    #         info(f"胜率: {win_rate:.2f}%")
+    #         info(f"平均盈利率: {avg_profit_rate:.2f}%")
+    #         info(f"平均亏损率: {avg_loss_rate:.2f}%")
+    #         info(f"最大回撤: {max_drawdown:.2f}%")
+    #         info(f"最大持仓股票数: {max_position_count}")
+    #         info(f"总手续费: {total_commission:,.2f} 元")
+    #         info(f"总印花税: {total_tax:,.2f} 元")
+    #         info(f"总交易成本: {total_costs:,.2f} 元")
+    #         info("=" * 100)
 
-            if stock_perf:
-                info("各股票表现详情:")
-                for code, v in stock_perf.items():
-                    stat = "盈利" if v['return_rate'] > 0 else "亏损"
-                    info(f"  {code}: {v['return_rate']:.2f}% ({stat})")
+    #         if stock_perf:
+    #             info("各股票表现详情:")
+    #             for code, v in stock_perf.items():
+    #                 stat = "盈利" if v['return_rate'] > 0 else "亏损"
+    #                 info(f"  {code}: {v['return_rate']:.2f}% ({stat})")
 
-            return True
-        except Exception as e:
-            error(f"分析结果时发生错误: {e}")
-            return False
+    #         return True
+    #     except Exception as e:
+    #         error(f"分析结果时发生错误: {e}")
+    #         return False
