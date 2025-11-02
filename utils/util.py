@@ -207,4 +207,4 @@ def get_trade_days_interval(date1: str, date2: str, trade_calendar: list) -> int
         raise ValueError(f"日期不在交易日历范围内: {date1} 或 {date2}")
     idx1 = trade_calendar.index(date1)
     idx2 = trade_calendar.index(date2)
-    return idx2 - idx1
+    return idx1 - idx2

@@ -358,10 +358,37 @@ class Broker:
         return self.positions.get(stock_code, {}).get('cost_price', 0.0)
 
 
-    # 下载交易记录至csv文件
+    def download_position_and_account_changes(self) -> bool:
+        """
+        下载持仓变动记录至excel文件 results/position_and_account_changes_YYYYMMDD_HHMMSS.xlsx
+        Returns:
+            bool: 是否成功
+        """
+        results_dir = "results"
+        if not os.path.exists(results_dir):
+            os.makedirs(results_dir)
+        
+        # 检查数据是否为空，如果为空则提示并返回False
+        if not self.position_and_account_changes:
+            info("没有持仓变动记录需要导出")
+            return False
+
+        try:
+            filename = f'{results_dir}/position_and_account_changes_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+            df = pd.DataFrame(self.position_and_account_changes)
+            if df.empty:
+                info("持仓变动记录为空（DataFrame为空），未生成excel文件")
+                return False
+            df.to_excel(filename, index=False)
+            info(f"下载持仓变动记录至excel文件完成- {filename}")
+            return True
+        except Exception as e:
+            error(f"导出持仓变动记录失败: {e}")
+            return False
+
     def download_transactions(self) -> bool:
         """
-        下载交易记录与持仓变动记录至csv文件 results/results_YYYYMMDD_HHMMSS.csv 
+        下载交易记录与持仓变动记录至excel文件 results/results_YYYYMMDD_HHMMSS.xlsx 
         分别保存为两个sheet，sheet1为交易记录，sheet2为持仓变动记录
         Returns:
             bool: 是否成功
@@ -371,13 +398,13 @@ class Broker:
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
 
-        filename = f'{results_dir}/results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        filename = f'{results_dir}/original_transactions_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
         df_transactions = pd.DataFrame(self.transactions)
         df_position_and_account_changes = pd.DataFrame(self.position_and_account_changes)
         with pd.ExcelWriter(filename) as writer:
             df_transactions.to_excel(writer, sheet_name='交易记录', index=False)
             df_position_and_account_changes.to_excel(writer, sheet_name='持仓变动记录', index=False)
-        info(f"下载交易记录与持仓变动记录至csv文件完成- {filename}")
+        info(f"下载交易记录与持仓变动记录至excel文件完成- {filename}")
         return True
 
     # # 分析结果

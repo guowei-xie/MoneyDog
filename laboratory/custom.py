@@ -4,8 +4,9 @@
 
 import pandas as pd
 from laboratory.singleK import is_limit, is_one_board
-from laboratory.multipleK import get_last_limit_day, get_limit_board_number, get_daily_bars_by_date, is_volume_decreasing, get_ma, is_ma_bullish, get_macd
+from laboratory.multipleK import get_last_limit_day, is_first_board, get_limit_board_number, get_daily_bars_by_date, is_volume_decreasing, get_ma, is_ma_bullish, get_macd
 from utils.logger import info, error, debug
+
 
 # 判断是否符合日K线图形：涨停后缩量盘整
 def is_limit_board_after_volume_consolidation(stock_code: str, daily_bars: pd.DataFrame, n: int = 5, m: int = 10, k: int = 2) -> bool:
@@ -66,7 +67,7 @@ def is_limit_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     limit_price = focused_bars.iloc[0]['close']
     lowest_price = focused_bars.iloc[1:]['low'].min()
     highest_price = focused_bars.iloc[1:]['high'].max()
-    if lowest_price / limit_price - 1 < -0.03 or highest_price / limit_price - 1 > 0.06:
+    if lowest_price / limit_price - 1 < -0.06 or highest_price / limit_price - 1 > 0.06:
         return False
 
     # 判断是否符合条件7（日线收盘价不破涨停日价格）,误差0.005

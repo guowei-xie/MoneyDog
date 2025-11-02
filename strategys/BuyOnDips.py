@@ -12,7 +12,7 @@ from utils.broker import Broker
 from laboratory.multipleK import get_last_limit_day_kline, get_ma, get_volume_change_rate, get_average_volume, get_macd, is_macd_top
 from laboratory.custom import is_limit_board_after_volume_consolidation
 from laboratory.singleK import get_limit_price, is_limit
-from laboratory.analyze import analyze_buy_and_sell_record
+from laboratory.analyze import analyze_buy_and_sell_record, analyze_account_changes
 
 config = configparser.ConfigParser()
 config.read('config.ini', encoding='utf-8')
@@ -292,7 +292,7 @@ class BuyOnDips:
                     'price': buy_price,
                     'volume': buy_volume,
                     'time': bars.index[-1],
-                    'desc': f"买入信号{' '.join(['1' if x else '0' for x in [signal_1, signal_2]])}"
+                    'desc': f"信号{' '.join(['1' if x else '0' for x in [signal_1, signal_2]])}"
                 }
             else:
                 info(f"可用资金不足，无法买入: {stock_code} 可用资金: {self.broker.available_amount}, 需求: {buy_price * buy_volume}")
@@ -338,7 +338,7 @@ class BuyOnDips:
         signals = [bool(signal_1), bool(signal_2), bool(signal_3), bool(signal_4), bool(signal_5), bool(signal_6)]
         if (any(signals[:4]) and signals[4]) or signals[5]:
             # 用0或1表示信号，例如101010，表示信号1、3、5符合
-            desc = f"卖出信号{' '.join(['1' if x else '0' for x in signals])}"
+            desc = f"信号{' '.join(['1' if x else '0' for x in signals])}"
             # 获取可卖出数量
             sell_volume = self.broker.get_available_volume(stock_code)
             if sell_volume > 0:
@@ -504,6 +504,8 @@ class BuyOnDips:
             bool: 是否成功
         """
         self.broker.download_transactions()
+        self.broker.download_position_and_account_changes()
+        analyze_account_changes(position_and_account_changes=self.broker.position_and_account_changes)
         analyze_buy_and_sell_record(transactions=self.broker.transactions)
         info(f"回测结束，运行耗时: {get_elapsed_time_str(self.start_time)}")
         return True
