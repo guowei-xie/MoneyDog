@@ -157,6 +157,11 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
                 pd.unique(np.array([str(x).strip() for x in sell_df['desc'] if pd.notna(x) and str(x).strip() != ""]))
             )
 
+            # 总手续费/印花税
+            total_commission = buy_df['commission'].sum() + sell_df['commission'].sum()
+            total_tax = sell_df['tax'].sum()
+            total_costs = total_commission + total_tax
+
             records.append({
                 "股票代码": code,
                 "建仓时间": time_str_to_datetime(build_t),
@@ -166,7 +171,10 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
                 "清仓价格": round(cp, 2),
                 "卖出信号": sell_desc,
                 "涨跌幅": round(rate, 4),
-                "持仓天数": hold_days
+                "持仓天数": hold_days,
+                "总手续费": total_commission,
+                "总印花税": total_tax,
+                "总成本": total_costs
             })
             # 卖完后自动进入下一个完整周期（有多段会被while循环依次分析）
 
@@ -189,15 +197,14 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
         info(f"盈亏比：平均涨幅{avg_profit_rate:.2f}%，平均跌幅{avg_loss_rate:.2f}%，盈亏比{-profit_loss_ratio:.2f}") 
         info(f"平均持仓天数: {result['持仓天数'].mean():.2f}")
         # 总交易手续费
-        total_commission = result['commission'].sum()
+        total_commission = result['总手续费'].sum()
         # 总交易印花税
-        total_tax = result['tax'].sum()
+        total_tax = result['总印花税'].sum()
         # 总交易成本
-        total_costs = total_commission + total_tax
+        total_costs = result['总成本'].sum()
         info(f"总交易手续费: {total_commission:,.2f} 元")
         info(f"总交易印花税: {total_tax:,.2f} 元")
-        info(f"总交易成本: {total_costs:,.2f} 元")
-
+        info(f"总交易成本: {total_costs:,.2f} 元")    
 
         print("\n个股交易记录:")
         print(result.to_string(index=False, justify='center', col_space=12))
