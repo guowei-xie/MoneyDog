@@ -186,7 +186,7 @@ class BuyOnDips:
             # 获取日成交量变化率
             volume_change_rate = get_volume_change_rate(daily_bar)
             # 获取日均成交量
-            average_volume = get_average_volume(daily_bar)
+            average_volume = get_average_volume(daily_bar, period=3)
             # 缓存个股数据
             self.cached[stock_code] = {
                 'daily_bar': daily_bar, # 日K线数据
@@ -302,7 +302,7 @@ class BuyOnDips:
     def _sell_signal(self, stock_code: str, bars: pd.DataFrame) -> dict:
         """
         卖出信号: 
-        1. 低于MA10价格
+        1. 低于MA10价格且在分时均价线之下（待完成）
         2. 昨日放量10%以上且高于近5日平均成交量
         3. 昨日涨停
         4. 今日上板失败

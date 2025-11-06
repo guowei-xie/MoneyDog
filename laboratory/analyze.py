@@ -178,7 +178,7 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
             })
             # 卖完后自动进入下一个完整周期（有多段会被while循环依次分析）
 
-    result = pd.DataFrame(records, columns=["股票代码", "建仓时间", "建仓价格", "清仓时间", "清仓价格", "涨跌幅", "持仓天数"])
+    result = pd.DataFrame(records, columns=["股票代码", "建仓时间", "建仓价格", "清仓时间", "清仓价格", "涨跌幅", "持仓天数", "总手续费", "总印花税", "总成本"])
     fname = f"results/analyze_transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     result.to_excel(fname, index=False)
 
@@ -206,8 +206,8 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
         info(f"总交易印花税: {total_tax:,.2f} 元")
         info(f"总交易成本: {total_costs:,.2f} 元")    
 
-        print("\n个股交易记录:")
-        print(result.to_string(index=False, justify='center', col_space=12))
+        # print("\n个股交易记录:")
+        # print(result.to_string(index=False, justify='center', col_space=12))
     else:
         print("没有交易记录可展示。")
     print(f"交易记录保存文件：{fname}")

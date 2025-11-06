@@ -145,6 +145,20 @@ def get_average_volume(daily_bars: pd.DataFrame, period: int = 5) -> float:
     daily_bars['average_volume'] = daily_bars['volume'].rolling(window=period).mean()
     return daily_bars
 
+# 计算滑动窗口最大成交量
+def get_max_volume(daily_bars: pd.DataFrame, period: int = 5) -> float:
+    """
+    计算滑动窗口最大成交量
+    Args:
+        daily_bars: 日K线数据框
+        period: 滑动周期，默认为5
+    Returns:
+        daily_bars: 新增'max_volume'列，包含每个交易日滑动窗口最大成交量
+    """
+    daily_bars = daily_bars.copy()
+    daily_bars['max_volume'] = daily_bars['volume'].rolling(window=period).max()
+    return daily_bars
+
 def get_volume_change_rate(daily_bars: pd.DataFrame) -> pd.DataFrame:
     """
     计算每个交易日成交量相对前一个交易日成交量变化率

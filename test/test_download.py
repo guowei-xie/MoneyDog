@@ -15,8 +15,8 @@ def test_download_stock_history_data():
     测试下载历史行情数据
     """
     stock_list = get_stock_list_in_main_board()
-    download_stock_history_data(stock_list, start_time="20240101", end_time="20251030", period="1d")
-    download_stock_history_data(stock_list, start_time="20240101", end_time="20251030", period="1m")
+    download_stock_history_data(stock_list, start_time="20251104", end_time="20251106", period="1d")
+    download_stock_history_data(stock_list, start_time="20251104", end_time="20251106", period="1m")
 
 # 测试下载某日分时K线数据
 def test_download_stock_history_data_by_day():

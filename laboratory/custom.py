@@ -4,7 +4,7 @@
 
 import pandas as pd
 from laboratory.singleK import is_limit, is_one_board
-from laboratory.multipleK import get_last_limit_day, is_first_board, get_limit_board_number, get_daily_bars_by_date, is_volume_decreasing, get_ma, is_ma_bullish, get_macd
+from laboratory.multipleK import get_last_limit_day, is_first_board, get_limit_board_number, get_daily_bars_by_date, is_volume_decreasing, get_ma, is_ma_bullish, get_macd, get_max_volume
 from utils.logger import info, error, debug
 
 
@@ -25,7 +25,7 @@ def is_limit_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     1. 近{n}个交易日内存在涨停板，且最近一次涨停最多是二板
     2. 近{m}个交易日内不能存在一字板
     3. 最近一次涨停日至少早于当前{k}个交易日
-    4. 最近的涨停日次日的成交量不低于涨停日的80%
+    4. 最近的涨停日次日的成交量不低于涨停日的80% 且不低于近10日最大成交量
     5. 最近的涨停日次日至今，成交量逐日递减
     6. 最近的涨停日次日至今，日内震荡幅度处于涨停日价格的-1%~6%之间
     7. 最近的涨停日次日至今，日线收盘价不破涨停日收盘价
@@ -48,22 +48,24 @@ def is_limit_board_after_volume_consolidation(stock_code: str, daily_bars: pd.Da
     if _is_exist_one_board(stock_code, daily_bars, m):
         return False
     
+    daily_bars = get_max_volume(daily_bars, period=5)
     focused_bars = get_daily_bars_by_date(daily_bars, start_date=last_limit_day, end_date=daily_bars.index[-1])
     
     # 判断是否符合条件3（通过focused_bars数量判断）
     if len(focused_bars) <= k:
         return False
     
-    # 判断是否符合条件4（第2根K线与第1根K线的volume字段比值>=80%）
+    # 判断是否符合条件4（第2根K线与第1根K线的volume字段比值>=80%， 且第2根K线的成交量不低于第1根K线的移动平均成交量）
     volume_ratio = focused_bars['volume'].iloc[1] / focused_bars['volume'].iloc[0]
-    if volume_ratio < 0.8:
+    max_volume_ratio = focused_bars['volume'].iloc[1] / focused_bars['max_volume'].iloc[0]
+    if volume_ratio < 0.8 or max_volume_ratio < 1:
         return False
     
     # 判断是否符合条件5（排除第1根K线后，成交量逐日递减）
     if not is_volume_decreasing(focused_bars.iloc[1:]):
         return False
 
-    # 判断是否符合条件6（排除第1根K线后，日内震荡幅度处于涨停日价格的-2%~6%之间）
+    # 判断是否符合条件6（排除第1根K线后，日内震荡幅度处于涨停日价格的-6%~+6%之间）
     limit_price = focused_bars.iloc[0]['close']
     lowest_price = focused_bars.iloc[1:]['low'].min()
     highest_price = focused_bars.iloc[1:]['high'].max()
