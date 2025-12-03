@@ -4,8 +4,9 @@
 import time
 import configparser
 import pandas as pd
+from tqdm import tqdm
 
-from utils.data import get_stock_list_in_main_board, get_trade_calendar, get_daily_bars, download_stock_history_data
+from utils.data import get_stock_list_in_main_board, get_trade_calendar, get_daily_bars
 from utils.logger import info, debug
 from utils.util import generate_minute_snapshot, get_elapsed_time_str, add_num_date_days
 from utils.broker import Broker
@@ -20,8 +21,8 @@ config.read('config.ini', encoding='utf-8')
 class BuyOnDips:
     def __init__(self):
         self.start_time = time.time()
-        self.download_start_time = config.get('DOWNLOAD', 'download_start_time')
-        self.download_required = config.get('DOWNLOAD', 'download_required')
+        # self.download_start_time = config.get('DOWNLOAD', 'download_start_time')
+        # self.download_required = config.get('DOWNLOAD', 'download_required')
         self.backtest_start_time = config.get('BACKTEST', 'backtest_start_time')
         self.backtest_end_time = config.get('BACKTEST', 'backtest_end_time')
         self.price_min = 5.0 # 价格区间选股：最低价格
@@ -65,28 +66,28 @@ class BuyOnDips:
         self.global_stock_list = get_stock_list_in_main_board()
         info(f"获取大盘股票池完成: {len(self.global_stock_list)} 只股票")
 
-        # 3. 下载历史日线数据
-        if self.download_required == "false":
-            info(f"下载配置为false，跳过下载大盘股票池历史数据和分时数据")
-            return True
+        # # 3. 下载历史日线数据
+        # if self.download_required == "false":
+        #     info(f"下载配置为false，跳过下载大盘股票池历史数据和分时数据")
+        #     return True
 
-        info(f"开始获取大盘股票池并下载历史数据")
-        start_time = time.time()
-        download_stock_history_data(self.global_stock_list, self.download_start_time, "1d", True)
-        info(f"获取大盘股票池完成: {len(self.global_stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
+        # info(f"开始获取大盘股票池并下载历史数据")
+        # start_time = time.time()
+        # download_stock_history_data(self.global_stock_list, self.download_start_time, "1d", True)
+        # info(f"获取大盘股票池完成: {len(self.global_stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
 
-        # 4. 下载股票分时数据
-        info(f"开始下载股票分时数据")
-        start_time = time.time()
-        download_stock_history_data(self.global_stock_list, self.download_start_time, "1m", True)
-        info(f"下载股票分时数据完成: {len(self.global_stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
+        # # 4. 下载股票分时数据
+        # info(f"开始下载股票分时数据")
+        # start_time = time.time()
+        # download_stock_history_data(self.global_stock_list, self.download_start_time, "1m", True)
+        # info(f"下载股票分时数据完成: {len(self.global_stock_list)} 只股票，耗时: {time.time() - start_time} 秒")
         return True
 
     def before_open(self, trade_date: str) -> bool:
         """
         策略开盘前运行
         Args:
-            trade_date: 交易日期
+            trade_date: 交易日期（如 '20250101'）
         1. 获取自选股票列表（预买入）
         2. 获取持仓股票列表（预卖出）
         3. 缓存盘前指标数据（备用于盘中运行）
@@ -134,8 +135,10 @@ class BuyOnDips:
         result = []
         for stock_code, daily_bar in daily_bars.items():
             if is_limit_board_after_volume_consolidation(stock_code, daily_bar):
-                if daily_bar.iloc[-1]['close'] >= self.price_min and daily_bar.iloc[-1]['close'] <= self.price_max:
+                latest_close_price = daily_bar.iloc[-1]['close']
+                if latest_close_price >= self.price_min and latest_close_price <= self.price_max:
                     result.append(stock_code)
+                    
         info(f"获取自选股票列表（预买入）完成: {len(result)} 只股票")
         debug(f"自选股票列表: {result}")
         return result

@@ -47,11 +47,13 @@ def test_get_daily_bars():
     #     print('-'*100)
 
     # 测试某日分时K线数据
-    daily_bars = get_daily_bars(stock_list=['003007.SZ'], period='1m', start_time='20240118', end_time='20250118', count=-1)
-    daily_bars = daily_bars['003007.SZ']
+    daily_bars = get_daily_bars(stock_list=['002829.SZ'], period='1m', start_time='20250902', end_time='20250903', count=-1)
+    daily_bars = daily_bars['002829.SZ']
     print(daily_bars)
 
 if __name__ == "__main__":
     # test_get_trade_calendar()
     # test_get_stock_list_in_main_board()
     test_get_daily_bars()
+
+    

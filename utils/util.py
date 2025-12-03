@@ -208,3 +208,49 @@ def get_trade_days_interval(date1: str, date2: str, trade_calendar: list) -> int
     idx1 = trade_calendar.index(date1)
     idx2 = trade_calendar.index(date2)
     return idx1 - idx2
+
+# 日期字符转换为时间戳，如日期字符 20251126 转换为时间戳: 1764115200000
+def date_to_timestamp(date_str, at_end_of_day: bool = False):
+    """
+    日期字符转换为时间戳
+    Args:
+        date_str: 日期字符，如“20251126”
+        at_end_of_day: 是否返回当天23:59:59的时间戳（默认为False，为00:00:00起始）
+    Returns:
+        int: 时间戳（毫秒级）
+    """
+    # 明确指定format防止不规则解析
+    ts = pd.to_datetime(date_str, format='%Y%m%d', errors='raise')
+    if at_end_of_day:
+        # 设置为当天23:59:59
+        ts = ts.replace(hour=23, minute=59, second=59, microsecond=0)
+    else:
+        # 设置为当天00:00:00
+        ts = ts.replace(hour=0, minute=0, second=0, microsecond=0)
+    # 转为纳秒后转毫秒（注意astype("int64")是纳秒）
+    return int(ts.value // 10**6)
+
+# 时间戳转换为日期字符，如时间戳 1737753600000 转换为日期字符: 20250124
+def timestamp_to_date(timestamp):
+    """
+    时间戳转换为日期字符
+    Args:
+        timestamp: 时间戳（毫秒级）
+    Returns:
+        str: 日期字符
+    """
+    # 必须是整数类型（毫秒级）
+    ts = pd.to_datetime(int(timestamp), unit='ms', errors='raise')
+    return ts.strftime('%Y%m%d')
+
+# 时间戳转换为时分秒字符，如时间戳 1737753600000 转换为日期时分秒字符: 20250124093900
+def timestamp_to_time(timestamp):
+    """
+    时间戳转换为日期时分秒字符
+    Args:
+        timestamp: 时间戳（毫秒级）
+    Returns:
+        str: 时分秒字符
+    """
+    ts = pd.to_datetime(int(timestamp), unit='ms', errors='raise')
+    return ts.strftime('%Y%m%d%H%M%S')
