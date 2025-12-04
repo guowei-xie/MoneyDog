@@ -132,26 +132,31 @@ def get_daily_bars(
     sql = f"SELECT {fields} FROM {table_name} WHERE {where_sql} ORDER BY code, time"
     df_all = duckdb_helper.conn.execute(sql).df()
 
-    # 如果count>0，需每只股票单独从最新向前截取count条
-    daily_bars = {}
-    grouped = df_all.groupby('code', sort=False)
-    for stock_code, df in grouped:
-        df = df.copy()
-        if add_preclose:
-            df['preClose'] = df['close'].shift(1)
-
-        if count > 0:
-            df = df.tail(count).reset_index(drop=True)
-
-        # 设置index
-        if period == '1d':
-            df['index'] = df['time'].apply(lambda x: timestamp_to_date(x))
-        elif period == '1m':
-            df['index'] = df['time'].apply(lambda x: timestamp_to_time(x))
-        else:
-            error(f"不支持的周期: {period}")
-            raise ValueError(f"不支持的周期: {period}")
-        df = df.set_index('index')
-        daily_bars[stock_code] = df
-
+    # 批量处理所有股票数据，避免Python循环，使用向量化操作提升性能
+    # 1. 添加前收盘价（如果需要）- 使用groupby向量化操作
+    if add_preclose:
+        df_all['preClose'] = df_all.groupby('code', sort=False)['close'].shift(1)
+    
+    # 2. 如果count>0，每只股票从最新向前截取count条 - 使用groupby向量化操作
+    if count > 0:
+        df_all = df_all.groupby('code', sort=False).tail(count).reset_index(drop=True)
+    
+    # 3. 批量设置index - 在整个DataFrame上一次性完成，避免循环
+    if period == '1d':
+        # 向量化转换：将时间戳Series转换为datetime后格式化
+        df_all['index'] = pd.to_datetime(df_all['time'], unit='ms').dt.strftime('%Y%m%d')
+    elif period == '1m':
+        # 向量化转换：将时间戳Series转换为datetime后格式化
+        df_all['index'] = pd.to_datetime(df_all['time'], unit='ms').dt.strftime('%Y%m%d%H%M%S')
+    else:
+        error(f"不支持的周期: {period}")
+        raise ValueError(f"不支持的周期: {period}")
+    
+    # 4. 设置index并转换为字典格式
+    # 注意：groupby操作在底层是C级别优化的，比Python循环快得多
+    df_all = df_all.set_index('index')
+    # 使用groupby分组，并在每个分组中移除code列（因为code已作为字典的key）
+    daily_bars = {code: group_df.drop(columns=['code']) 
+                  for code, group_df in df_all.groupby('code', sort=False)}
+    
     return daily_bars
