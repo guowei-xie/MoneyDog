@@ -1,9 +1,11 @@
 ## MoneyDog 量化交易系统
 
-MoneyDog 是一个基于 **Python + 本地 DuckDB 数据库** 的量化交易回测小系统，目前内置一套「首板缩量盘整 + 分时择时」示例策略 `BuyOnDips`。
+MoneyDog(旺财) 是一个基于 **Python + 本地 DuckDB 数据库** 的量化交易回测小系统，采用策略基类架构，支持灵活的策略开发与配置。
 
 ### 🚀 功能特性
 
+- **策略基类架构**: 提供 `BaseStrategy` 基类，简化策略开发流程
+- **策略可配置**: 通过配置文件切换策略，无需修改代码
 - **策略回测**: 按交易日逐日回放，支持分钟级分时回测
 - **技术分析**: 内置多种 K 线、均线、量能、MACD 等技术指标与图形识别算法
 - **模拟交易**: 支持资金管理、持仓管理、佣金与印花税精细计算
@@ -24,7 +26,8 @@ MoneyDog/
 ├── data/
 │   └── stock.duckdb       # 行情数据 DuckDB 库（需预先准备）
 ├── strategys/             # 策略模块
-│   └── BuyOnDips.py       # 买入在低点示例策略
+│   ├── BaseStrategy.py    # 策略基类，提供通用框架
+│   └── *.py               # 具体策略实现
 ├── utils/                 # 工具与基础设施模块
 │   ├── broker.py          # 模拟交易撮合与资金管理
 │   ├── data.py            # 从 DuckDB 读取行情、交易日历等
@@ -94,7 +97,7 @@ MoneyDog/
 5. **准备 DuckDB 数据库**
 
 - 在 `config.ini` 中指定 DuckDB 路径（默认 `data/stock.duckdb`）
-- 通过自有脚本 / Notebook / 未来的数据下载模块，将日线与 1 分钟线行情写入对应表（如 `stock_list`、`daily_1day`、`daily_1min`）
+- 通过自有脚本将日线与 1 分钟线行情写入对应表（如 `stock_list`、`daily_1day`、`daily_1min`）
 
 当前代码假定 DuckDB 中至少存在：
 
@@ -118,7 +121,17 @@ level = INFO
 data_path = data/stock.duckdb
 ```
 
-> 历史版本中的 `[DOWNLOAD]` 段已经注释掉，当前示例策略直接从本地 DuckDB 读取数据。
+### 策略配置
+
+```ini
+[STRATEGY]
+# 策略模块名（策略文件名，不含.py后缀）
+strategy_module = N_Pattern_Bottom
+# 策略类名（策略类名称）
+strategy_class = NPatternBottom
+```
+
+> 通过修改 `[STRATEGY]` 配置段即可切换不同策略，无需修改代码。
 
 ### 回测参数
 
@@ -148,48 +161,31 @@ max_vol_amount = 100000
 
 ---
 
-## 🎯 内置示例策略：BuyOnDips
-
-`strategys/BuyOnDips.py` 实现了一个「首板缩量盘整 + 分时择时买入」的示例策略，大致逻辑如下：
-
-1. **准备阶段 `prepare()`**
-   - 从 AKShare 获取交易日历（`utils.data.get_trade_calendar`）
-   - 从 DuckDB 中读取主板股票池（`get_stock_list_in_main_board`）
-   - 根据回测时间区间构建回测日期序列
-
-2. **开盘前 `before_open(trade_date)`**
-   - 盘前清理与解锁持仓（`Broker.clean_position` / `unlock_position`）
-   - 生成待卖出列表（当前持仓）
-   - 通过 `is_limit_board_after_volume_consolidation` 等条件筛选自选股（预买入池）
-   - 为当日回测构造分钟级快照数据（`generate_minute_snapshot`）
-
-3. **盘中 `on_minute(snapshot)`**
-   - 对每分钟快照逐股计算买卖信号：
-     - `_buy_signal`：动态 MA5 / MA10、首板涨停价、价格区间等条件
-     - `_sell_signal_*`：动态 MA10 跌破、放量、昨日涨停、上板失败、MACD 顶点、炸板等
-   - 调用 `Broker.buy` / `Broker.sell` 执行虚拟撮合、记录交易与资金变动
-
-4. **收盘后 `after_close(trade_date)`**
-   - 使用当日最后一个分钟快照更新持仓最新价
-   - 记录账户与持仓变化（`record_position_and_account_change`）
-
-5. **回测结束 `end_of_backtest()`**
-   - 导出交易记录与账户曲线 Excel
-   - 调用 `laboratory.analyze` 对交易结果进行统计分析
-
----
-
 ## 🚀 快速开始
 
 ### 运行回测
 
-确保 `config.ini` 与 `data/stock.duckdb` 准备妥当后，在项目根目录执行：
+1. **配置策略**
 
-```bash
-python main.py
-```
+   在 `config.ini` 的 `[STRATEGY]` 段中配置要使用的策略：
 
-日志会输出到控制台及 `logs/MoneyDog_YYYY-MM-DD.log`。
+   ```ini
+   [STRATEGY]
+   strategy_module = N_Pattern_Bottom
+   strategy_class = NPatternBottom
+   ```
+
+2. **运行回测**
+
+   确保 `config.ini` 与 `data/stock.duckdb` 准备妥当后，在项目根目录执行：
+
+   ```bash
+   python main.py
+   ```
+
+   系统会自动根据配置文件加载对应策略并开始回测。
+
+   日志会输出到控制台及 `logs/MoneyDog_YYYY-MM-DD.log`。
 
 ### 查看结果
 
@@ -215,24 +211,194 @@ python main.py
 
 ## 🔧 开发与扩展指南
 
-### 添加新策略
+### 策略基类运行流程
 
-1. 在 `strategys/` 目录下新增一个策略文件，例如 `MyStrategy.py`
-2. 参考 `BuyOnDips` 的结构，实现以下核心方法：
-   - `prepare()`：回测前准备（交易日历、股票池、缓存因子等）
-   - `before_open(trade_date)`：单日开盘前逻辑
-   - `on_minute(snapshot)`：分钟级行情驱动的买卖信号
-   - `after_close(trade_date)`：单日收盘后处理
-   - `end_of_backtest()`：回测结束后的汇总与导出
-3. 在 `main.py` 中替换为自己的策略类：
+`BaseStrategy` 基类提供了完整的回测框架，运行流程如下：
 
-   ```python
-   from strategys.MyStrategy import MyStrategy
+```mermaid
+flowchart TD
+    A[开始运行] --> B[prepare 准备阶段]
+    B --> B1[获取交易日期列表]
+    B1 --> B2[获取股票池]
+    B2 --> C{遍历交易日历}
+    
+    C --> D[before_open 开盘前]
+    D --> D1[清理持仓/解锁]
+    D1 --> D2[获取持仓列表]
+    D2 --> D3[get_selected_stock_list<br/>子类实现: 选股逻辑]
+    D3 --> D4[set_cached<br/>子类实现: 缓存指标数据]
+    D4 --> D5[生成分时快照]
+    D5 --> D6{是否有股票?}
+    
+    D6 -->|否| E[after_close 收盘后]
+    D6 -->|是| F{遍历分时快照}
+    
+    F --> G[on_minute 盘中运行]
+    G --> G1{股票类型?}
+    G1 -->|自选股| G2[buy_signal<br/>子类实现: 买入信号]
+    G1 -->|持仓股| G3[sell_signal<br/>子类实现: 卖出信号]
+    G2 --> G4{有信号?}
+    G3 --> G4
+    G4 -->|是| G5[执行交易]
+    G4 -->|否| F
+    G5 --> F
+    
+    F -->|完成| E
+    E --> E1[更新持仓信息]
+    E1 --> E2[记录账户变化]
+    E2 --> C
+    
+    C -->|所有交易日完成| H[end_of_backtest 回测结束]
+    H --> H1[导出交易记录]
+    H1 --> H2[导出账户变化]
+    H2 --> H3[分析交易结果]
+    H3 --> I[结束]
+```
 
-   if __name__ == "__main__":
-       strategy = MyStrategy()
-       strategy.run()
-   ```
+#### 流程说明
+
+**准备阶段（prepare）**
+- 获取交易日期列表：根据配置的回测时间区间生成交易日历
+- 获取股票池：默认使用主板股票池，子类可重写 `_get_stock_list()` 方法
+
+**每日运行循环**
+- **开盘前（before_open）**：
+  - 清理持仓：清除 volume 为 0 的持仓，解锁昨日被锁定的持仓
+  - 获取持仓列表：当前持有的股票（预卖出）
+  - 获取自选列表：调用子类的 `get_selected_stock_list()` 方法筛选股票（预买入）
+  - 缓存数据：调用子类的 `set_cached()` 方法计算并缓存技术指标
+  - 生成分时快照：为当日回测准备分钟级行情数据
+
+- **盘中运行（on_minute）**：
+  - 遍历每分钟的快照数据
+  - 对于自选股：调用子类的 `buy_signal()` 方法判断买入信号
+  - 对于持仓股：调用子类的 `sell_signal()` 方法判断卖出信号
+  - 如有信号，执行交易（买入/卖出）
+
+- **收盘后（after_close）**：
+  - 更新持仓信息：使用最后一个分时快照更新持仓最新价
+  - 记录账户变化：记录当日账户与持仓变化
+
+**回测结束（end_of_backtest）**
+- 导出交易记录和账户变化数据到 Excel
+- 调用分析模块对交易结果进行统计分析
+
+> **注意**：标有"子类实现"的方法需要由策略开发者实现，其他流程由基类自动处理。
+
+### 基于策略基类开发新策略
+
+推荐使用策略基类 `BaseStrategy` 开发新策略，可以大幅简化开发流程。
+
+#### 步骤1：创建策略文件
+
+在 `strategys/` 目录下创建新的策略文件，例如 `MyStrategy.py`：
+
+```python
+from strategys.BaseStrategy import BaseStrategy
+from typing import List, Dict, Optional
+import pandas as pd
+
+class MyStrategy(BaseStrategy):
+    """
+    我的策略
+    """
+    
+    def __init__(self):
+        """
+        初始化策略
+        """
+        super().__init__()
+        # 添加策略特定参数
+        self.price_min = 5.0
+        self.price_max = 60.0
+    
+    def get_selected_stock_list(self, trade_date: str) -> List[str]:
+        """
+        获取自选股票列表（预买入）
+        子类必须实现此方法
+        """
+        # 实现选股逻辑
+        pass
+    
+    def set_cached(self, trade_date: str) -> bool:
+        """
+        缓存盘前数据（备用于盘中运行）
+        子类必须实现此方法
+        """
+        # 实现数据缓存逻辑
+        pass
+    
+    def buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
+        """
+        买入信号生成
+        子类必须实现此方法
+        """
+        # 实现买入信号逻辑
+        pass
+    
+    def sell_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
+        """
+        卖出信号生成
+        子类必须实现此方法
+        """
+        # 实现卖出信号逻辑
+        pass
+```
+
+#### 步骤2：实现四个核心方法
+
+策略基类要求实现以下四个抽象方法：
+
+1. **`get_selected_stock_list(trade_date)`**：获取自选股票列表（预买入）
+   - 根据选股条件筛选股票
+   - 返回股票代码列表
+
+2. **`set_cached(trade_date)`**：缓存盘前数据
+   - 计算并缓存技术指标
+   - 存储到 `self.cached[stock_code]` 字典中
+
+3. **`buy_signal(stock_code, bars)`**：买入信号生成
+   - 根据分时K线数据判断买入条件
+   - 返回交易信号字典或 `None`
+
+4. **`sell_signal(stock_code, bars)`**：卖出信号生成
+   - 根据分时K线数据判断卖出条件
+   - 返回交易信号字典或 `None`
+
+#### 步骤3：配置策略
+
+在 `config.ini` 中添加策略配置：
+
+```ini
+[STRATEGY]
+strategy_module = MyStrategy
+strategy_class = MyStrategy
+```
+
+#### 步骤4：运行回测
+
+直接运行 `main.py`，系统会自动加载配置的策略：
+
+```bash
+python main.py
+```
+
+#### 基类提供的功能
+
+`BaseStrategy` 基类已经实现了以下功能，无需重复开发：
+
+- ✅ 策略运行主流程（`run()`）
+- ✅ 交易日历获取与遍历
+- ✅ 股票池管理
+- ✅ 开盘前/收盘后处理
+- ✅ 分时快照生成与遍历
+- ✅ 持仓管理
+- ✅ 交易执行
+- ✅ 回测结果导出与分析
+
+#### 参考示例
+
+可以参考 `strategys/` 目录下的现有策略实现了解完整的开发示例。
 
 ### 扩展技术指标与形态识别
 

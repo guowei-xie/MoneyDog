@@ -111,7 +111,7 @@ class BaseStrategy(ABC):
         self.holding_stock_list = self._get_holding_stock_list()
         
         # 2. 获取自选股票列表（预买入），过滤掉已经持仓的股票
-        self.selected_stock_list = self._get_selected_stock_list(trade_date)
+        self.selected_stock_list = self.get_selected_stock_list(trade_date)
         self.selected_stock_list = [stock_code for stock_code in self.selected_stock_list if stock_code not in self.holding_stock_list]
         info(f"自选股票列表（预买入）: {self.selected_stock_list}")
         
@@ -121,7 +121,7 @@ class BaseStrategy(ABC):
             return False
         
         # 3. 缓存盘前指标数据（备用于盘中运行）
-        self._set_cached(trade_date)
+        self.set_cached(trade_date)
         
         # 4. 获取当日分时线数据，并模拟分时快照数据
         self.minute_snapshots = self._simulate_minute_daily(add_num_date_days(trade_date, 1, self.trade_calendar))
@@ -145,7 +145,7 @@ class BaseStrategy(ABC):
         return result
 
     @abstractmethod
-    def _get_selected_stock_list(self, trade_date: str) -> List[str]:
+    def get_selected_stock_list(self, trade_date: str) -> List[str]:
         """
         获取自选股票列表（预买入）
         子类必须实现此方法
@@ -157,7 +157,7 @@ class BaseStrategy(ABC):
         pass
 
     @abstractmethod
-    def _set_cached(self, trade_date: str) -> bool:
+    def set_cached(self, trade_date: str) -> bool:
         """
         缓存盘前数据（备用于盘中运行）
         子类必须实现此方法
@@ -198,9 +198,9 @@ class BaseStrategy(ABC):
             
             # 根据股票是否在自选或持仓列表，调用相应的信号方法
             if stock_code in self.selected_stock_list:
-                signal = self._buy_signal(stock_code, bars)
+                signal = self.buy_signal(stock_code, bars)
             elif stock_code in self.holding_stock_list:
-                signal = self._sell_signal(stock_code, bars)
+                signal = self.sell_signal(stock_code, bars)
             else:
                 continue
             
@@ -210,7 +210,7 @@ class BaseStrategy(ABC):
         return True
 
     @abstractmethod
-    def _buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
+    def buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
         """
         买入信号生成
         子类必须实现此方法
@@ -223,7 +223,7 @@ class BaseStrategy(ABC):
         pass
 
     @abstractmethod
-    def _sell_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
+    def sell_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
         """
         卖出信号生成
         子类必须实现此方法

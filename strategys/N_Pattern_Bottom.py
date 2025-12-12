@@ -100,7 +100,7 @@ class NPatternBottom(BaseStrategy):
         self.price_min = 5.0  # 价格区间选股：最低价格
         self.price_max = 60.0  # 价格区间选股：最高价格
 
-    def _get_selected_stock_list(self, trade_date: str) -> List[str]:
+    def get_selected_stock_list(self, trade_date: str) -> List[str]:
         """
         获取自选股票列表（预买入）
         Args:
@@ -120,7 +120,7 @@ class NPatternBottom(BaseStrategy):
         debug(f"自选股票列表: {result}")
         return result
 
-    def _set_cached(self, trade_date: str) -> bool:
+    def set_cached(self, trade_date: str) -> bool:
         """
         缓存盘前数据（备用于盘中运行）
         Args:
@@ -168,7 +168,7 @@ class NPatternBottom(BaseStrategy):
 
         return True
 
-    def _buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
+    def buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
         """
         买入信号:
         1. 动态ma5价格大于最低价（含误差）
@@ -224,7 +224,7 @@ class NPatternBottom(BaseStrategy):
                 return None
         return None
 
-    def _sell_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
+    def sell_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
         """
         卖出信号: 
         1. 低于MA10价格且在分时均价线之下（待完成）
