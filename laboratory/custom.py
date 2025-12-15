@@ -167,6 +167,34 @@ def is_limit_board_after_volume_consolidation_v2(stock_code: str, daily_bars: pd
 
     return True
 
+def dual_momentum_breakout(stock_code: str, daily_bars: pd.DataFrame) -> bool:
+    """
+    判断是否符合双重动量突破图形要求
+    Args:
+        stock_code: 股票代码
+        daily_bars: 日K线数据框
+    Returns:
+        bool: 是否符合图形要求，True表示符合，False表示不符合
+    图形要求：
+    1. 最近一日突破5日均线
+    2. 最近一日MACD趋势向上
+    """
+
+    # 判断是否符合条件1（最近一日突破5日均线）
+    ma = get_ma(daily_bars=daily_bars, period=5)
+    is_breakout_ma = daily_bars.iloc[-1]['close'] > ma and daily_bars.iloc[-2]['close'] < ma
+    if not is_breakout_ma:
+        return False
+
+    # 判断是否符合条件2（最近一日MACD趋势向上）
+    macd_data = get_macd(daily_bars=daily_bars)
+    is_macd_up = macd_data.iloc[-1]['macd'] > 0 and macd_data.iloc[-2]['macd'] < 0
+    if not is_macd_up:
+        return False
+
+    return True
+
+
 def _is_exist_last_first_board(stock_code: str, daily_bars: pd.DataFrame, n: int = 5) -> bool:
     """
     判断是否存在最近{n}个交易日内存在涨停板，且最近一次涨停是首板
