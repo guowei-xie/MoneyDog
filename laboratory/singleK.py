@@ -2,6 +2,7 @@
 单K线工具库
 """
 
+from pickle import FALSE
 from utils.util import get_stock_market_type
 
 def get_limit_percentage(stock_code: str) -> float:
@@ -63,6 +64,25 @@ def is_one_board(stock_code: str, price: float, previous_close: float, low: floa
     if low != high or abs(low - high) > tolerance:
         return False
     return True
+
+# 判断是否T字板
+def is_t_board(stock_code: str, price: float, previous_close: float, open: float, low: float, high: float, limit_type: str = 'up', tolerance: float = 0.002) -> bool:
+    """
+    判断是否T字板
+    Args:
+        stock_code: 股票代码
+        price: 当前价格
+        previous_close: 前一日收盘价
+        limit_type: 涨跌停类型，'up'表示涨停，'down'表示跌停,
+        tolerance: 误差范围
+    Returns:
+        bool: 是否T字板
+    """
+    if not is_limit(stock_code, price, previous_close, limit_type, tolerance):
+        return False
+    if low != high and open == price:
+        return True
+    return False
         
 def get_limit_price(stock_code: str, previous_close: float, limit_type: str = 'up', tolerance: float = 0.002) -> float:
     """
