@@ -42,10 +42,17 @@ class Broker:
         # 计算佣金
         commission = max(total_cost * self.commission_rate, self.min_commission)
         cost_all = total_cost + commission
+
+        # 判断买入数量为0时，返回False
+        if volume <= 0:
+            info(f"买入数量为0，无法买入: {stock_code} 数量: {volume}, 时间: {time_str_to_datetime(time)}，描述: {desc}")
+            return False
+            
         # 判断是否可用资金不足，如果不足则返回False
         if self.available_amount < cost_all:
             info(f"资金不足，无法买入: {stock_code} 资金需求: {cost_all}, 可用: {self.available_amount}, 时间: {time_str_to_datetime(time)}，描述: {desc}")
             return False
+
         # 更新持仓
         self.set_position(stock_code, price, volume)
         # 更新可用资金
