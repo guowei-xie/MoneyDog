@@ -5,9 +5,11 @@ MoneyDog 终端应用入口
 import configparser
 import os
 import sys
+import importlib
 from tabulate import tabulate
 from main import load_strategy
 from utils.logger import info, error
+from strategys.BaseStrategy import BaseStrategy
 
 
 class ConfigApp:
@@ -116,8 +118,12 @@ class ConfigApp:
             print("无效选项")
             return
         
-        section, desc = sections[choice]
-        self.edit_section(section, desc)
+        # 策略配置采用专门的交互式选择界面
+        if choice == '3':
+            self.edit_strategy_config()
+        else:
+            section, desc = sections[choice]
+            self.edit_section(section, desc)
     
     def edit_section(self, section: str, section_desc: str):
         """
@@ -181,6 +187,149 @@ class ConfigApp:
                 print("请输入有效的数字")
             except Exception as e:
                 print(f"编辑配置时出错: {e}")
+
+    def _discover_strategies(self):
+        """
+        扫描策略目录，获取可用策略列表
+        
+        Returns:
+            list[dict]: [{'module': 模块名, 'classes': [类名列表]}]
+        """
+        strategies = []
+        # 定位 strategys 目录
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        strategies_dir = os.path.join(base_dir, "strategys")
+        if not os.path.isdir(strategies_dir):
+            print(f"未找到策略目录: {strategies_dir}")
+            return strategies
+
+        for filename in sorted(os.listdir(strategies_dir)):
+            # 仅处理 .py 文件，排除基类和内部模块
+            if not filename.endswith(".py"):
+                continue
+            module_name = filename[:-3]
+            if module_name in ("BaseStrategy", "__init__") or module_name.startswith("_"):
+                continue
+
+            full_module_name = f"strategys.{module_name}"
+            try:
+                module = importlib.import_module(full_module_name)
+            except Exception as e:
+                print(f"加载策略模块失败: {full_module_name}，错误: {e}")
+                continue
+
+            # 查找继承自 BaseStrategy 的策略类
+            classes = []
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+                if isinstance(attr, type) and issubclass(attr, BaseStrategy) and attr is not BaseStrategy:
+                    classes.append(attr_name)
+
+            if classes:
+                strategies.append({
+                    "module": module_name,
+                    "classes": sorted(classes),
+                })
+
+        return strategies
+
+    def edit_strategy_config(self):
+        """
+        交互式编辑策略配置
+        通过扫描 strategys 目录展示可用策略，供用户直接选择
+        """
+        print("\n" + "=" * 60)
+        print("策略配置")
+        print("=" * 60)
+
+        # 获取当前配置，作为默认值展示
+        current_module = self.config.get('STRATEGY', 'strategy_module', fallback='')
+        current_class = self.config.get('STRATEGY', 'strategy_class', fallback='')
+
+        strategies = self._discover_strategies()
+        if not strategies:
+            print("未发现可用策略，请确认 strategys 目录下存在具体策略文件。")
+            return
+
+        print("\n可用策略列表：")
+        rows = []
+        for idx, item in enumerate(strategies, 1):
+            module_name = item["module"]
+            class_list = item["classes"]
+            # 标记当前已选中的策略
+            is_current = (module_name == current_module and current_class in class_list)
+            mark = "✓" if is_current else ""
+            rows.append([
+                idx,
+                module_name,
+                ", ".join(class_list),
+                mark,
+            ])
+
+        print(tabulate(
+            rows,
+            headers=["序号", "模块名", "策略类（可选）", "当前选择"],
+            tablefmt="grid",
+        ))
+
+        print("\n说明：")
+        print("  - 请选择一个模块号；如该模块下有多个策略类，将在下一步让你选择具体类。")
+        print("  - 如直接回车，则保持当前配置不变。")
+
+        choice = input("\n请输入策略模块序号（回车保持不变，0 返回）: ").strip()
+        if choice == "":
+            print("策略配置未更改")
+            return
+        if choice == "0":
+            return
+
+        try:
+            idx = int(choice) - 1
+            if idx < 0 or idx >= len(strategies):
+                print("无效选项")
+                return
+        except ValueError:
+            print("请输入有效的数字")
+            return
+
+        selected = strategies[idx]
+        module_name = selected["module"]
+        class_list = selected["classes"]
+
+        # 如果只有一个类，直接使用；否则让用户选择
+        if len(class_list) == 1:
+            strategy_class = class_list[0]
+        else:
+            print(f"\n模块 {module_name} 下包含多个策略类，请选择：")
+            for i, cls_name in enumerate(class_list, 1):
+                mark = "（当前）" if (module_name == current_module and cls_name == current_class) else ""
+                print(f"  {i}. {cls_name} {mark}")
+            print("  0. 取消")
+
+            sub_choice = input("\n请输入策略类序号（0 取消）: ").strip()
+            try:
+                sub_idx = int(sub_choice)
+            except ValueError:
+                print("请输入有效的数字")
+                return
+            if sub_idx == 0:
+                print("已取消更改")
+                return
+            if not (1 <= sub_idx <= len(class_list)):
+                print("无效选项")
+                return
+            strategy_class = class_list[sub_idx - 1]
+
+        # 写入配置并保存
+        if not self.config.has_section('STRATEGY'):
+            self.config.add_section('STRATEGY')
+        self.config.set('STRATEGY', 'strategy_module', module_name)
+        self.config.set('STRATEGY', 'strategy_class', strategy_class)
+
+        if self.save_config():
+            print(f"\n✓ 策略已更新为: {module_name}.{strategy_class}")
+        else:
+            print("\n✗ 策略配置保存失败")
     
     def run_strategy(self):
         """
