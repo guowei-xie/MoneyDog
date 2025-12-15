@@ -361,7 +361,7 @@ class NPatternBreakout(BaseStrategy):
         if self._sell_shield_signal(stock_code, bars):
             return None
 
-         # 获取可用卖出数量
+        # 获取可用卖出数量
         available_volume = self.broker.get_available_volume(stock_code)
         if available_volume <= 0:
             return None
@@ -505,6 +505,7 @@ class NPatternBreakout(BaseStrategy):
         highest_change_rate = (bars['high'].max() - yesterday_close_price) / yesterday_close_price
         if highest_change_rate >= fail_to_board_limit and bars.iloc[-1]['close'] < limit_price_up:
             return True
+        return False
 
     def _sell_signal_4(self, stock_code: str, bars: pd.DataFrame, compare_top_price: bool = False) -> bool:
         """
@@ -524,7 +525,7 @@ class NPatternBreakout(BaseStrategy):
                 # 更新顶部顶点价格
                 self.cached[stock_code]['top_price'] = bars.iloc[-1]['close']
                 # 判断当前价格是否低于上一个顶部顶点价格
-                if bars.iloc[-1]['close'] < last_top_price:
+                if bars.iloc[-1]['close'] < last_top_price or last_top_price == 0:
                     return True
             else:
                 return True
