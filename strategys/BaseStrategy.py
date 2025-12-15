@@ -15,10 +15,6 @@ from utils.util import generate_minute_snapshot, get_elapsed_time_str, add_num_d
 from utils.broker import Broker
 from laboratory.analyze import analyze_buy_and_sell_record, analyze_account_changes
 
-# 读取配置
-config = configparser.ConfigParser()
-config.read('config.ini', encoding='utf-8')
-
 
 class BaseStrategy(ABC):
     """
@@ -31,8 +27,12 @@ class BaseStrategy(ABC):
         初始化策略
         """
         self.start_time = time.time()
-        self.backtest_start_time = config.get('BACKTEST', 'backtest_start_time')
-        self.backtest_end_time = config.get('BACKTEST', 'backtest_end_time')
+
+        # 每次实例化策略时重新读取配置，避免长生命周期进程中使用旧配置
+        cfg = configparser.ConfigParser()
+        cfg.read('config.ini', encoding='utf-8')
+        self.backtest_start_time = cfg.get('BACKTEST', 'backtest_start_time')
+        self.backtest_end_time = cfg.get('BACKTEST', 'backtest_end_time')
         self.broker = Broker()
         
         # 交易日历和股票池（在prepare中初始化）
@@ -210,7 +210,7 @@ class BaseStrategy(ABC):
             # 如果有信号，执行交易
             if signal is not None:
                 self.trade(signal)
-                
+
             # 策略盘中分时线运行结束后运行自定义方法
             self.on_minute_end(stock_code, bars)
         return True
