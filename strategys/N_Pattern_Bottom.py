@@ -170,9 +170,10 @@ class NPatternBottom(BaseStrategy):
 
     def buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
         """
-        买入信号:
-        1. 动态ma5价格大于最低价（含误差）
-        2. 开盘价大于动态ma5价格
+        买入信号逻辑：
+        1. 动态MA5价格大于等于当前分时最低价（允许一定误差），且开盘价大于等于动态MA5；
+        2. 或动态MA10价格大于等于当前分时最低价（允许一定误差），且开盘价大于等于动态MA10且小于动态MA5。
+        
         Args:
             stock_code: 股票代码
             bars: 分时K线快照
@@ -331,7 +332,7 @@ class NPatternBottom(BaseStrategy):
     def _sell_signal_4(self, stock_code: str, bars: pd.DataFrame) -> bool:
         """
         卖出信号4:
-        1. 今日上板失败(即当日最高价大于9%，但最新价低于涨停价)
+        1. 今日上板失败(即当日最高涨幅大于9%，但最新价低于涨停价)
         Args:
             stock_code: 股票代码
             bars: 分时K线快照
@@ -339,7 +340,11 @@ class NPatternBottom(BaseStrategy):
             bool: 是否符合
         """
         limit_price_up = self.cached[stock_code]['limit_price_up']
-        if bars['high'].max() >= limit_price_up * 1.09 and bars.iloc[-1]['close'] < limit_price_up:
+        daily_bar = self.cached[stock_code].get('daily_bar', pd.DataFrame())
+        yesterday_close_price = daily_bar.iloc[-1]['close']
+        # 最高涨幅
+        highest_change_rate = (bars['high'].max() - yesterday_close_price) / yesterday_close_price
+        if highest_change_rate >= 0.09 and bars.iloc[-1]['close'] < limit_price_up:
             return True
         return False
 
@@ -369,7 +374,7 @@ class NPatternBottom(BaseStrategy):
             bool: 是否符合
         """
         limit_price_up = self.cached[stock_code]['limit_price_up']
-        if bars.iloc[-1]['open'] >= limit_price_up and bars.iloc[-1]['close'] < limit_price_up:
+        if bars.iloc[-1]['high'] >= limit_price_up and bars.iloc[-1]['close'] < limit_price_up:
             return True
         return False
 
