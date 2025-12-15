@@ -196,6 +196,9 @@ class BaseStrategy(ABC):
             if not stock_code or bars is None:
                 continue
             
+            # 策略盘中分时线运行开始时运行自定义方法
+            self.on_minute_start(stock_code, bars)
+
             # 根据股票是否在自选或持仓列表，调用相应的信号方法
             if stock_code in self.selected_stock_list:
                 signal = self.buy_signal(stock_code, bars)
@@ -207,7 +210,22 @@ class BaseStrategy(ABC):
             # 如果有信号，执行交易
             if signal is not None:
                 self.trade(signal)
+                
+            # 策略盘中分时线运行结束后运行自定义方法
+            self.on_minute_end(stock_code, bars)
         return True
+    
+    def on_minute_end(self, stock_code: str, bars: pd.DataFrame):
+        """
+        策略盘中分时线运行结束后运行
+        """
+        pass
+
+    def on_minute_start(self, stock_code: str, bars: pd.DataFrame):
+        """
+        策略盘中分时线运行开始时运行
+        """
+        pass
 
     @abstractmethod
     def buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
