@@ -291,6 +291,7 @@ flowchart TD
   - 生成分时快照：为当日回测准备分钟级行情数据
 
 - **盘中运行（on_minute）**：
+  - 钩子：遍历每只股票的分钟数据前调用 `on_minute_start()`，处理完信号与交易后调用 `on_minute_end()`，便于在信号判断前后做额外准备或收尾
   - 遍历每分钟的快照数据
   - 对于自选股：调用子类的 `buy_signal()` 方法判断买入信号
   - 对于持仓股：调用子类的 `sell_signal()` 方法判断卖出信号
@@ -366,9 +367,9 @@ class MyStrategy(BaseStrategy):
         pass
 ```
 
-#### 步骤2：实现四个核心方法
+#### 步骤2：实现四个核心方法（必选）+ 两个盘中钩子（可选）
 
-策略基类要求实现以下四个抽象方法：
+基类要求实现以下四个抽象方法：
 
 1. **`get_selected_stock_list(trade_date)`**：获取自选股票列表（预买入）
    - 根据选股条件筛选股票
@@ -385,6 +386,11 @@ class MyStrategy(BaseStrategy):
 4. **`sell_signal(stock_code, bars)`**：卖出信号生成
    - 根据分时K线数据判断卖出条件
    - 返回交易信号字典或 `None`
+
+可选的盘中钩子（非抽象方法，可按需重写）：
+
+- **`on_minute_start(stock_code, bars)`**：每只股票在当分钟信号判断前触发，可用于预处理或缓存最新指标
+- **`on_minute_end(stock_code, bars)`**：每只股票在当分钟处理完成后触发，可用于记录调试信息或复位状态
 
 #### 步骤3：配置策略
 
