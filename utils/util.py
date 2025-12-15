@@ -6,6 +6,7 @@
 import pandas as pd
 from utils.logger import error, warning
 import time
+import math
 
 def date_str_to_num_str(date_str: str) -> str:
     """
@@ -209,26 +210,31 @@ def get_trade_days_interval(date1: str, date2: str, trade_calendar: list) -> int
     idx2 = trade_calendar.index(date2)
     return idx1 - idx2
 
-# 日期字符转换为时间戳，如日期字符 20251126 转换为时间戳: 1764115200000
 def date_to_timestamp(date_str, at_end_of_day: bool = False):
     """
-    日期字符转换为时间戳
+    日期字符转换为时间戳（北京时间）
     Args:
-        date_str: 日期字符，如“20251126”
-        at_end_of_day: 是否返回当天23:59:59的时间戳（默认为False，为00:00:00起始）
+        date_str: 日期字符，如"20251126"
+        at_end_of_day: 是否返回当天23:59:59的时间戳
     Returns:
         int: 时间戳（毫秒级）
     """
-    # 明确指定format防止不规则解析
+    # 解析日期
     ts = pd.to_datetime(date_str, format='%Y%m%d', errors='raise')
+    
+    # 设置时间
     if at_end_of_day:
-        # 设置为当天23:59:59
         ts = ts.replace(hour=23, minute=59, second=59, microsecond=0)
     else:
-        # 设置为当天00:00:00
         ts = ts.replace(hour=0, minute=0, second=0, microsecond=0)
-    # 转为纳秒后转毫秒（注意astype("int64")是纳秒）
-    return int(ts.value // 10**6)
+    
+    # 转换为北京时间（Asia/Shanghai）
+    ts_beijing = ts.tz_localize('Asia/Shanghai')
+    
+    # 转换为UTC时间戳（毫秒）
+    timestamp_ms = int(ts_beijing.timestamp() * 1000)
+    
+    return timestamp_ms
 
 # 时间戳转换为日期字符，如时间戳 1737753600000 转换为日期字符: 20250124
 def timestamp_to_date(timestamp):
@@ -254,3 +260,18 @@ def timestamp_to_time(timestamp):
     """
     ts = pd.to_datetime(int(timestamp), unit='ms', errors='raise')
     return ts.strftime('%Y%m%d%H%M%S')
+
+# 将用户输入的计划卖出股票数量和可用股票数量转化为安全的数量（以100为单位）
+def convert_to_safe_sell_volume(plan_volume: int, available_volume: int) -> int:
+    """
+    将用户输入的计划卖出股票数量和可用股票数量转化为安全的数量（以100为单位）
+    Args:
+        plan_volume: 计划卖出股票数量
+        available_volume: 可用股票数量
+    Returns:
+        int: 安全的股票数量（以100为单位）
+    """
+    # 计划卖出股票数量向上取整为100的倍数
+    plan_volume = math.ceil(plan_volume / 100) * 100
+    # 当计划卖出股票数量大于可用股票数量时，返回可用股票数量
+    return min(plan_volume, available_volume)

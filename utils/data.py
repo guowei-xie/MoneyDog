@@ -144,10 +144,13 @@ def get_daily_bars(
     # 3. 批量设置index - 在整个DataFrame上一次性完成，避免循环
     if period == '1d':
         # 向量化转换：将时间戳Series转换为datetime后格式化
-        df_all['index'] = pd.to_datetime(df_all['time'], unit='ms').dt.strftime('%Y%m%d')
+        df_all['index'] = pd.to_datetime(df_all['time'], unit='ms', utc=True)\
+                     .dt.tz_convert('Asia/Shanghai')\
+                     .dt.strftime('%Y%m%d')
     elif period == '1m':
         # 向量化转换：将时间戳Series转换为datetime后格式化
-        df_all['index'] = pd.to_datetime(df_all['time'], unit='ms').dt.strftime('%Y%m%d%H%M%S')
+        df_all['index'] = pd.to_datetime(df_all['time'], unit='ms', utc=True)\
+                     .dt.strftime('%Y%m%d%H%M%S')
     else:
         error(f"不支持的周期: {period}")
         raise ValueError(f"不支持的周期: {period}")
