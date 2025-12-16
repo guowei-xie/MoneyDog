@@ -193,6 +193,23 @@ def is_ma_bullish(daily_bars: pd.DataFrame) -> bool:
         return True
     return False
 
+# 均线空头排列
+def is_ma_bearish(daily_bars: pd.DataFrame) -> bool:
+    """
+    均线空头排列（MA5<MA10<MA20<MA30）
+    Args:
+        daily_bars: 日K线数据框
+    Returns:
+        bool: 是否空头排列，True表示空头排列，False表示不空头排列
+    """
+    ma5 = get_ma(daily_bars=daily_bars, period=5)
+    ma10 = get_ma(daily_bars=daily_bars, period=10)
+    ma20 = get_ma(daily_bars=daily_bars, period=20)
+    ma30 = get_ma(daily_bars=daily_bars, period=30)
+    if ma5 < ma10 < ma20 < ma30:
+        return True
+    return False
+
 # MACD计算
 def get_macd(daily_bars: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.DataFrame:
     """
