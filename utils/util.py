@@ -7,6 +7,7 @@ import pandas as pd
 from utils.logger import error, warning
 import time
 import math
+import numpy as np
 
 def date_str_to_num_str(date_str: str) -> str:
     """
@@ -275,3 +276,20 @@ def convert_to_safe_sell_volume(plan_volume: int, available_volume: int) -> int:
     plan_volume = math.ceil(plan_volume / 100) * 100
     # 当计划卖出股票数量大于可用股票数量时，返回可用股票数量
     return min(plan_volume, available_volume)
+
+def calculate_slope_polyfit(vector: list, degree: int = 1) -> float:
+    """
+    标准化后，使用numpy的polyfit计算向量斜率
+    Args:
+        vector: 向量列表
+        degree: 拟合次数
+    Returns:
+        float: 向量斜率
+    """
+    # 标准化向量
+    vector = (vector - np.mean(vector)) / np.std(vector)
+    # 计算斜率
+    x = np.arange(len(vector))
+    y = np.array(vector)
+    coefficients = np.polyfit(x, y, degree)
+    return coefficients[0]

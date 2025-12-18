@@ -85,7 +85,8 @@ def get_daily_bars(
     start_time: str = '', 
     end_time: str = '', 
     count: int = -1, 
-    add_preclose: bool = True
+    add_preclose: bool = True,
+    table_name: str = ''
 ) -> dict:
     """
     获取行情数据
@@ -96,25 +97,22 @@ def get_daily_bars(
         end_time: 结束时间
         count: 数量。如果为-1，则返回所有；如果>0，优先生效count条（从最新时间往前取）
         add_preclose: 是否添加前收盘价。如果为True，则添加前收盘价
+        table_name: 表名(如: 'daily_1day' 或 'daily_1min' 或 'index_daily')
     Returns:
         dict: {stock_code: DataFrame}
     """
-
-    # 查询效率优化建议：
-    # 1. 尽量减少循环内数据库IO，合并为批量查询（利用IN语句一次性取出所有数据）
-    # 2. 仅选取所需字段，避免SELECT *。
-    # 3. 若count参数仅为正数，推荐在SQL层面LIMIT，而不是Pandas后处理。主板数据大多已按time排序，可直接limit（但注意每个股票分别limit要多加处理）
-
     if not stock_list:
         error("股票列表为空")
         raise ValueError("股票列表为空")
-    if period == '1d':
-        table_name = 'daily_1day'
-    elif period == '1m':
-        table_name = 'daily_1min'
-    else:
-        error(f"不支持的周期: {period}")
-        raise ValueError(f"不支持的周期: {period}")
+
+    if table_name == '':
+        if period == '1d':
+            table_name = 'daily_1day'
+        elif period == '1m':
+            table_name = 'daily_1min'
+        else:
+            error(f"不支持的周期: {period}")
+            raise ValueError(f"不支持的周期: {period}")
 
     start_ts = date_to_timestamp(start_time) if start_time else None
     end_ts = date_to_timestamp(end_time, at_end_of_day=True) if end_time else None

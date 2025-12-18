@@ -132,6 +132,23 @@ def get_ma(daily_bars: pd.DataFrame, period: int = 5) -> float:
     ma_price = daily_bars['close'].rolling(window=period).mean().iloc[-1]
     return round(ma_price, 2)
 
+def get_ma_list(daily_bars: pd.DataFrame, period: int = 5, count: int = -1) -> list:
+    """
+    计算MA均线列表
+    Args:
+        daily_bars: 日K线数据框
+        period: 均线周期，默认为5
+        count: 返回最后几个交易日的MA均线列表，默认为-1，返回所有交易日的MA均线列表
+    Returns:
+        ma_list: MA均线列表
+    """
+    if count != -1:
+        ma_list = daily_bars['close'].rolling(window=period).mean().iloc[-count:].tolist()
+    else:
+        ma_list = daily_bars['close'].rolling(window=period).mean().tolist()
+    ma_list = [round(ma, 2) for ma in ma_list]
+    return ma_list
+
 def get_average_volume(daily_bars: pd.DataFrame, period: int = 5) -> float:
     """
     滑动计算日均成交量
@@ -283,3 +300,52 @@ def is_macd_bottom(macd_data: pd.DataFrame) -> bool:
     
     # 判断是否满足见底条件：m1 < m2 < m3 < m4 < m5
     return m1 > m2 > m3 > m4 < m5 and m1 < 0 and m2 < 0 and m3 < 0 and m4 < 0 and m5 < 0
+
+# 计算BOLL带（中轨、上轨、下轨）
+def get_boll(daily_bars: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+    """
+    计算布林带（中轨、上轨、下轨）
+    Args:
+        daily_bars: 日K线数据框
+        period: 均线周期，默认为20
+    Returns:
+        boll_df: 含原数据及boll中轨、上轨、下轨的数据框
+    """
+    boll_df = daily_bars.copy()
+    # 计算中轨（移动平均线）
+    boll_df['boll_mid'] = boll_df['close'].rolling(window=period, min_periods=period).mean()
+    # 计算标准差
+    rolling_std = boll_df['close'].rolling(window=period, min_periods=period).std()
+    # 计算上轨（中轨 + 2倍标准差）
+    boll_df['boll_upper'] = boll_df['boll_mid'] + 2 * rolling_std
+    # 计算下轨（中轨 - 2倍标准差）
+    boll_df['boll_lower'] = boll_df['boll_mid'] - 2 * rolling_std
+    return boll_df
+
+# 利用分时快照，构造动态日线级别K线
+def get_dynamic_daily_kline(bars: pd.DataFrame) -> pd.DataFrame:
+    """
+    利用分时快照，构造动态日线级别K线
+    包含："open, high, low, close, volume, amount"
+    Args:
+        bars: 分时快照
+    Returns:
+        pd.DataFrame: 动态日线级别K线
+    """
+    # 检查 bars 是否为空
+    if bars is None or bars.empty:
+        return pd.DataFrame()
+
+    # 构建一行字典
+    kline_dict = {
+        'open': bars['open'].iloc[0],
+        'high': bars['high'].max(),
+        'low': bars['low'].min(),
+        'close': bars['close'].iloc[-1],
+        'volume': bars['volume'].sum(),
+        'amount': bars['amount'].sum()
+    }
+
+    # 返回单行DataFrame，列保持一致
+    return pd.DataFrame([kline_dict])
+
