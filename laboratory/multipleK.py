@@ -349,3 +349,101 @@ def get_dynamic_daily_kline(bars: pd.DataFrame) -> pd.DataFrame:
     # 返回单行DataFrame，列保持一致
     return pd.DataFrame([kline_dict])
 
+# MA5底部图形
+def get_ma5_bottom(daily_bars: pd.DataFrame, left_count: int = 5, right_count: int = 1) -> pd.DataFrame:
+    """
+    MA5底部图形判断
+    对于每个交易日T，如果T-left_count到T-1日连续MA5下跌，且T+1到T+right_count日连续MA5上涨，则T日是MA5底部
+    
+    Args:
+        daily_bars: 日K线数据框
+        left_count: 左侧确认长度天数（默认5）
+        right_count: 右侧确认长度天数（默认1）
+    Returns:
+        pd.DataFrame: 包含原始数据和新增'is_ma5_bottom'列的数据框，'is_ma5_bottom'列标记是否为MA5底部
+    """
+    # 复制数据框，避免修改原始数据
+    df = daily_bars.copy()
+    
+    # 如果数据为空，直接返回
+    if len(df) == 0:
+        df['is_ma5_bottom'] = False
+        return df
+    
+    # 计算MA5值
+    df['ma5'] = df['close'].rolling(window=5, min_periods=5).mean()
+    
+    # 计算MA5的变化量（diff = MA5[t] - MA5[t-1]）
+    ma5_diff = df['ma5'].diff()
+    
+    # 检查左侧left_count天是否连续下跌（diff < 0）
+    # 对于T日，检查T-left_count到T-1这left_count天的diff是否都小于0
+    left_decreasing = (ma5_diff < 0).rolling(window=left_count, min_periods=left_count).apply(
+        lambda x: x.all() and not x.isna().any(), raw=False
+    ).shift(1)  # 对齐到T日
+    # rolling.apply 返回 float(0.0/1.0/NaN)，这里统一转成 bool，避免 bool & float 的 TypeError
+    left_decreasing = left_decreasing.fillna(0).astype(bool)
+    
+    # 检查右侧right_count天是否连续上涨（diff > 0）
+    # 对于T日，检查T+1到T+right_count这right_count天的diff是否都大于0
+    right_increasing = (ma5_diff > 0).rolling(window=right_count, min_periods=right_count).apply(
+        lambda x: x.all() and not x.isna().any(), raw=False
+    ).shift(-right_count)  # 对齐到T日
+    right_increasing = right_increasing.fillna(0).astype(bool)
+    
+    # 合并条件：左侧连续下跌且右侧连续上涨
+    df['is_ma5_bottom'] = (left_decreasing & right_increasing).astype(bool)
+    
+    # 删除临时计算的ma5列
+    # df.drop(['ma5'], axis=1, inplace=True)
+    
+    return df
+
+# MA5顶部图形
+def get_ma5_top(daily_bars: pd.DataFrame, left_count: int = 5, right_count: int = 1) -> pd.DataFrame:
+    """
+    MA5顶部图形判断
+    对于每个交易日T，如果T-left_count到T-1日连续MA5上涨，且T+1到T+right_count日连续MA5下跌，则T日是MA5顶部
+    
+    Args:
+        daily_bars: 日K线数据框
+        left_count: 左侧确认长度天数（默认5）
+        right_count: 右侧确认长度天数（默认1）
+    Returns:
+        pd.DataFrame: 包含原始数据和新增'is_ma5_top'列的数据框，'is_ma5_top'列标记是否为MA5顶部
+    """
+    # 复制数据框，避免修改原始数据
+    df = daily_bars.copy()
+    
+    # 如果数据为空，直接返回
+    if len(df) == 0:
+        df['is_ma5_top'] = False
+        return df
+    
+    # 计算MA5值
+    df['ma5'] = df['close'].rolling(window=5, min_periods=5).mean()
+    
+    # 计算MA5的变化量（diff = MA5[t] - MA5[t-1]）
+    ma5_diff = df['ma5'].diff()
+    
+    # 检查左侧left_count天是否连续上涨（diff > 0）
+    # 对于T日，检查T-left_count到T-1这left_count天的diff是否都大于0
+    left_increasing = (ma5_diff > 0).rolling(window=left_count, min_periods=left_count).apply(
+        lambda x: x.all() and not x.isna().any(), raw=False
+    ).shift(1)  # 对齐到T日
+    left_increasing = left_increasing.fillna(0).astype(bool)
+    
+    # 检查右侧right_count天是否连续下跌（diff < 0）
+    # 对于T日，检查T+1到T+right_count这right_count天的diff是否都小于0
+    right_decreasing = (ma5_diff < 0).rolling(window=right_count, min_periods=right_count).apply(
+        lambda x: x.all() and not x.isna().any(), raw=False
+    ).shift(-right_count)  # 对齐到T日
+    right_decreasing = right_decreasing.fillna(0).astype(bool)
+    
+    # 合并条件：左侧连续上涨且右侧连续下跌
+    df['is_ma5_top'] = (left_increasing & right_decreasing).astype(bool)
+    
+    # 删除临时计算的ma5列
+    # df.drop(['ma5'], axis=1, inplace=True)
+    
+    return df
