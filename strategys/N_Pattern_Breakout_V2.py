@@ -15,10 +15,13 @@ from laboratory.multipleK import (
     get_ma5_top,
     get_macd,
     is_macd_bottom,
+    is_macd_top,
     get_dynamic_daily_kline,
 )
 from laboratory.singleK import is_limit
 from utils.logger import info
+from laboratory.singleK import get_limit_price
+from utils.util import convert_to_safe_sell_volume
 
 class NPatternBreakoutV2(BaseStrategy):
     """
@@ -35,6 +38,12 @@ class NPatternBreakoutV2(BaseStrategy):
         
         # 卖出配置
         self.batch_sell_count = 2  # 卖出时分批次数
+        self.sell_macd_min_bars = 5  # MACD 顶点/底部判定所需最少分时K线数量
+        self.sell_broken_limit_gap_minutes = 3  # 炸板判定：距离最近一次封板的分钟数 >= N（3分钟未回封）
+        self.sell_yesterday_max_change_rate = 0.08  # 组合A条件：昨日最大涨幅阈值（>=8%）
+        self.sell_intraday_max_change_rate = 0.09  # 组合A条件：日内最大涨幅阈值（>=9%）
+        self.sell_volume_expand_rate_normal = 0.10  # 组合A条件：非建仓日昨日成交量放大阈值（>=10%）
+        self.sell_volume_expand_rate_build_day = 0.30  # 组合A条件：建仓日昨日成交量放大阈值（>=30%）
         
         # 选股条件配置
         self.limit_check_days = 5  # 近N个交易日内存在涨停板
@@ -200,6 +209,11 @@ class NPatternBreakoutV2(BaseStrategy):
         for stock_code, daily_bar in daily_bars.items():
             self.cached[stock_code] = {}
             self.cached[stock_code]['daily_bar'] = daily_bar
+            # 分批卖出剩余次数（默认每天盘前重置）
+            self.cached[stock_code]['batch_sell_count'] = self.batch_sell_count
+            # 分时MACD顶部记录：用于卖出信号里做“上一个顶点”对比
+            self.cached[stock_code]['top_price'] = 0.0
+            self.cached[stock_code]['top_macd'] = 0.0
             
             # 获取T日（涨停日）收盘价
             last_limit_day = get_last_limit_day(stock_code, daily_bar, n=self.limit_check_days)
@@ -219,6 +233,29 @@ class NPatternBreakoutV2(BaseStrategy):
                 self.cached[stock_code]['last_ma5_top_price'] = None
         
         return True
+
+    def on_minute_end(self, stock_code: str, bars: pd.DataFrame):
+        """
+        分钟结束时更新盘中缓存数据。
+
+        目前用于：记录分时 MACD 顶点（价格/指标值），为后续“比较上一次顶点/顶背离”提供依据。
+
+        Args:
+            stock_code (str): 股票代码
+            bars (pd.DataFrame): 分时K线快照数据
+        """
+        if stock_code not in self.cached:
+            return
+        if bars is None or getattr(bars, "empty", True) or len(bars) < self.sell_macd_min_bars:
+            return
+
+        macd_data = get_macd(bars)
+        if is_macd_top(macd_data):
+            self._update_top_cache(
+                stock_code=stock_code,
+                top_price=float(bars.iloc[-1]['close']),
+                top_macd=float(macd_data.iloc[-1]['macd']),
+            )
 
     def buy_signal(self, stock_code: str, bars) -> Optional[Dict]:
         """
@@ -297,16 +334,16 @@ class NPatternBreakoutV2(BaseStrategy):
         total_volume = bars['volume'].sum()
         if total_volume > 0:
             total_amount = bars['amount'].sum()
-            avg_price = total_amount / total_volume
+            avg_price = total_amount / total_volume / 100
             if current_price < avg_price:
                 return None
 
-        # 6) 分时 MACD 底部（昂贵）
+        # 6) 分时 MACD 底部
         macd_data = get_macd(bars)
         if not is_macd_bottom(macd_data):
             return None
 
-        # 7) 动态日线 MACD 红柱且高于昨日（昂贵）
+        # 7) 动态日线 MACD 红柱且高于昨日
         dynamic_daily_kline = get_dynamic_daily_kline(bars)
         if dynamic_daily_kline.empty:
             return None
@@ -328,16 +365,239 @@ class NPatternBreakoutV2(BaseStrategy):
                 'price': current_price,
                 'volume': buy_volume,
                 'time': bars.index[-1],
-                'desc': 'N字战法V2买入信号'
+                'desc': ''
             }
         else:
             info(f"可用资金不足，无法买入: {stock_code}")
             return None
 
+    def _check_macd_top_gate(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict[str, float]]:
+        """
+        分时 MACD 顶点过滤（卖出触发的必要条件）。
+
+        满足：
+        1) 分时 MACD 出现顶点（`is_macd_top`）
+        2) 且符合以下任一：
+           - 日内首次出现（无上一次顶点记录）
+           - 低于上一个顶点价格
+           - 顶背离：价格不低于上一次顶点价，但 MACD 柱值低于上一次顶点 MACD
+
+        Args:
+            stock_code (str): 股票代码
+            bars (pd.DataFrame): 分时K线快照
+
+        Returns:
+            Optional[Dict[str, float]]: 通过时返回 {current_price, current_macd, last_top_price, last_top_macd}；否则返回 None
+        """
+        if bars is None or getattr(bars, "empty", True) or len(bars) < self.sell_macd_min_bars:
+            return None
+
+        current_price = float(bars.iloc[-1]['close'])
+        macd_data = get_macd(bars)
+        if not is_macd_top(macd_data):
+            return None
+
+        current_macd = float(macd_data.iloc[-1]['macd'])
+        last_top_price = float(self.cached[stock_code].get('top_price', 0.0) or 0.0)
+        last_top_macd = float(self.cached[stock_code].get('top_macd', 0.0) or 0.0)
+
+        is_first_top = last_top_price <= 0
+        is_lower_than_last_top = (last_top_price > 0 and current_price < last_top_price)
+        # 顶背离（内联）：价格不低于上次顶点，但 MACD 弱于上次顶点
+        is_divergence = (last_top_price > 0 and last_top_macd != 0 and current_price >= last_top_price and current_macd < last_top_macd)
+
+        if not (is_first_top or is_lower_than_last_top or is_divergence):
+            return None
+
+        return {
+            'current_price': current_price,
+            'current_macd': current_macd,
+            'last_top_price': last_top_price,
+            'last_top_macd': last_top_macd,
+        }
+
+    def _update_top_cache(self, stock_code: str, top_price: float, top_macd: float):
+        """
+        更新分时 MACD 顶点缓存（用于后续“比较上一次顶点/顶背离”）。
+
+        Args:
+            stock_code (str): 股票代码
+            top_price (float): 顶点价格（本策略用当前分钟收盘价）
+            top_macd (float): 顶点 MACD 柱值
+        """
+        self.cached[stock_code]['top_price'] = float(top_price)
+        self.cached[stock_code]['top_macd'] = float(top_macd)
+
+    def _get_sell_volume_by_batch(self, stock_code: str, available_volume: int) -> int:
+        """
+        按“剩余分批次数”计算本次卖出数量，并返回安全委托数量（100整数倍）。
+
+        Args:
+            stock_code (str): 股票代码
+            available_volume (int): 当前可用可卖数量
+
+        Returns:
+            int: 本次卖出数量（0表示不卖）
+        """
+        batch_sell_count = int(self.cached[stock_code].get('batch_sell_count', self.batch_sell_count) or self.batch_sell_count)
+        batch_sell_count = max(batch_sell_count, 1)
+        plan_sell_volume = available_volume / batch_sell_count
+        return int(convert_to_safe_sell_volume(plan_sell_volume, available_volume))
+
+    def _sell_combo_b_broken_limit(self, stock_code: str, bars: pd.DataFrame, yesterday_close: float, available_volume: int) -> Optional[Dict]:
+        """
+        组合B：炸板清仓（3分钟未回封）。
+
+        Args:
+            stock_code (str): 股票代码
+            bars (pd.DataFrame): 分时K线快照
+            yesterday_close (float): 昨日收盘价（用于计算涨停价）
+            available_volume (int): 可卖数量
+
+        Returns:
+            Optional[Dict]: 卖出信号，无信号返回 None
+        """
+        current_price = float(bars.iloc[-1]['close'])
+        limit_price_up = float(get_limit_price(stock_code, yesterday_close, 'up'))
+        is_hit_limit = (bars['high'].max() >= limit_price_up)
+        if not (is_hit_limit and current_price < limit_price_up):
+            return None
+
+        limit_close_idx = bars.index[bars['close'] >= limit_price_up]
+        if len(limit_close_idx) <= 0:
+            return None
+
+        last_limit_pos = int(bars.index.get_loc(limit_close_idx[-1]))
+        gap = (len(bars) - 1) - last_limit_pos
+        if gap < self.sell_broken_limit_gap_minutes:
+            return None
+
+        info(f"{stock_code} 触发炸板清仓: gap={gap}")
+        return {
+            'action': 'sell',
+            'stock_code': stock_code,
+            'price': current_price,
+            'volume': int(available_volume),
+            'time': bars.index[-1],
+            'desc': '止盈（炸板）'
+        }
+
+    def _sell_combo_a_take_profit(self, stock_code: str, bars: pd.DataFrame, daily_bar: pd.DataFrame, available_volume: int, top_ctx: Dict[str, float]) -> Optional[Dict]:
+        """
+        组合A：分批止盈卖出。
+
+        条件：
+        - 当前盈利
+        - 且满足（昨日最大涨幅>=8% / 昨日成交量放大（建仓日30%否则10%）/ 日内最大涨幅>=9%）之一
+        - 且满足 MACD 顶点过滤（由 top_ctx 表示）
+        """
+        current_price = float(top_ctx['current_price'])
+        current_macd = float(top_ctx['current_macd'])
+
+        cost_price = float(self.broker.get_position_cost_price(stock_code))
+        if not (cost_price > 0 and current_price > cost_price):
+            return None
+
+        yesterday_bar = daily_bar.iloc[-1]
+        yesterday_close = float(yesterday_bar['close'])
+        yesterday_pre_close = float(yesterday_bar['preClose'])
+        yesterday_max_change = (float(yesterday_bar['high']) - yesterday_pre_close) / yesterday_pre_close if yesterday_pre_close > 0 else 0.0
+
+        prev_bar = daily_bar.iloc[-2]
+        prev_volume = float(prev_bar['volume'])
+        yesterday_volume = float(yesterday_bar['volume'])
+        volume_change_rate = (yesterday_volume - prev_volume) / prev_volume if prev_volume > 0 else 0.0
+
+        build_date = self.broker.get_build_date(stock_code)
+        yesterday_date = str(daily_bar.index[-1]).replace('-', '').replace(' ', '')[:8]
+        volume_threshold = self.sell_volume_expand_rate_build_day if (build_date and build_date == yesterday_date) else self.sell_volume_expand_rate_normal
+        is_yesterday_volume_expand = volume_change_rate >= volume_threshold
+
+        intraday_high = float(bars['high'].max())
+        intraday_max_change = (intraday_high - yesterday_close) / yesterday_close if yesterday_close > 0 else 0.0
+
+        cond2 = (
+            yesterday_max_change >= self.sell_yesterday_max_change_rate
+            or is_yesterday_volume_expand
+            or intraday_max_change >= self.sell_intraday_max_change_rate
+        )
+        if not cond2:
+            return None
+
+        sell_volume = self._get_sell_volume_by_batch(stock_code, int(available_volume))
+        if sell_volume <= 0:
+            return None
+
+        self.cached[stock_code]['batch_sell_count'] = max(int(self.cached[stock_code].get('batch_sell_count', self.batch_sell_count)) - 1, 0)
+        self._update_top_cache(stock_code, current_price, current_macd)
+        # info(f"{stock_code} 触发分批止盈卖出: vol={sell_volume}, remain={self.cached[stock_code]['batch_sell_count']}")
+        return {
+            'action': 'sell',
+            'stock_code': stock_code,
+            'price': current_price,
+            'volume': int(sell_volume),
+            'time': bars.index[-1],
+            'desc': '止盈（常规）'
+        }
+
+    def _sell_combo_c_stop_loss(self, stock_code: str, bars: pd.DataFrame, available_volume: int, top_ctx: Dict[str, float]) -> Optional[Dict]:
+        """
+        组合C：分批止损卖出（跌破 MA5 顶部支撑 + MACD 顶点过滤）。
+        """
+        support_price = self.cached[stock_code].get('last_ma5_top_price')
+        if support_price is None:
+            return None
+
+        current_price = float(top_ctx['current_price'])
+        current_macd = float(top_ctx['current_macd'])
+        if current_price >= float(support_price):
+            return None
+
+        sell_volume = self._get_sell_volume_by_batch(stock_code, int(available_volume))
+        if sell_volume <= 0:
+            return None
+
+        self.cached[stock_code]['batch_sell_count'] = max(int(self.cached[stock_code].get('batch_sell_count', self.batch_sell_count)) - 1, 0)
+        self._update_top_cache(stock_code, current_price, current_macd)
+        # info(f"{stock_code} 触发分批止损卖出: close={current_price}, support={support_price}, vol={sell_volume}")
+        return {
+            'action': 'sell',
+            'stock_code': stock_code,
+            'price': current_price,
+            'volume': int(sell_volume),
+            'time': bars.index[-1],
+            'desc': '止损（常规）'
+        }
+
     def sell_signal(self, stock_code: str, bars) -> Optional[Dict]:
         """
-        生成卖出信号
+        生成卖出信号(基于条件组合，当任意组合命中时，卖出；卖出方式分为分批卖出和清仓卖出)
+
+        若当前涨停，则不卖出，否则执行以下组合：
+
+        组合A（分批止盈卖出）：
+            1. 当前盈利
+            2. 且符合以下任意条件：
+                - 昨日最大涨幅>=8%
+                - 昨日（非建仓日）成交量放大10%以上
+                - 昨日（是建仓日）成交量放大30%以上
+                - 日内最大涨幅>=9%
+            3. 且当分时MACD出现顶点，并且符合以下任意条件：
+                - 日内首次出现
+                - 低于上一个顶点价格
+                - 发生顶背离（不低于上个顶点价格，但MACD值小于上个顶点MACD值）
         
+        组合B（清仓止盈卖出）:
+            1. 炸板（3分钟未回封，即间隔最近一根涨停k线数量>=3）
+
+        组合C（分批止损卖出）:
+            1. 以最近一次MA5顶部价格作为支撑位，跌破支撑位
+            2. 且当分时MACD出现顶点，并且符合以下任意条件：
+                - 日内首次出现
+                - 低于上一个顶点价格
+                - 发生顶背离（不低于上个顶点价格，但MACD值小于上个顶点MACD值）
+            
+
         Args:
             stock_code (str): 股票代码
             bars: 分时K线快照数据（DataFrame）
@@ -345,6 +605,49 @@ class NPatternBreakoutV2(BaseStrategy):
         Returns:
             Optional[Dict]: 卖出信号字典，无信号返回 None
         """
-        # TODO: 实现卖出信号逻辑
-        # 当前仅为占位实现
+        # 0) 持仓过滤
+        if stock_code not in self.broker.positions:
+            return None
+        if bars is None or getattr(bars, "empty", True) or len(bars) < self.sell_macd_min_bars:
+            return None
+        if stock_code not in self.cached or 'daily_bar' not in self.cached[stock_code]:
+            return None
+
+        daily_bar = self.cached[stock_code]['daily_bar']
+        if daily_bar is None or daily_bar.empty or len(daily_bar) < 2:
+            return None
+
+        available_volume = int(self.broker.get_available_volume(stock_code))
+        if available_volume <= 0:
+            return None
+
+        # 昨日数据（用于涨停保护、涨幅、成交量）
+        yesterday_bar = daily_bar.iloc[-1]
+        yesterday_close = float(yesterday_bar['close'])
+        current_price = float(bars.iloc[-1]['close'])
+
+        # 屏蔽：当前涨停，不卖出
+        if is_limit(stock_code, current_price, yesterday_close):
+            return None
+
+        # 1) 组合B：炸板清仓（优先级最高，不依赖MACD顶点）
+        signal_b = self._sell_combo_b_broken_limit(stock_code, bars, yesterday_close, available_volume)
+        if signal_b is not None:
+            return signal_b
+
+        # 2) MACD 顶点过滤（A/C 都需要）
+        top_ctx = self._check_macd_top_gate(stock_code, bars)
+        if top_ctx is None:
+            return None
+
+        # 3) 组合A：分批止盈
+        signal_a = self._sell_combo_a_take_profit(stock_code, bars, daily_bar, available_volume, top_ctx)
+        if signal_a is not None:
+            return signal_a
+
+        # 4) 组合C：分批止损
+        signal_c = self._sell_combo_c_stop_loss(stock_code, bars, available_volume, top_ctx)
+        if signal_c is not None:
+            return signal_c
+
         return None
