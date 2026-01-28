@@ -44,7 +44,7 @@ class NPatternBreakoutV2(BaseStrategy):
         self.amplitude_check_days = 20  # 近N日区间振幅检查
         self.max_amplitude = 0.5  # 最大振幅（最高价/最低价-1）
         self.limit_count_check_days = 250  # 近N个交易日（约1年）统计涨停次数
-        self.min_limit_count = 5  # 近1年涨停次数 >= N次
+        self.min_limit_count = 6  # 近1年涨停次数 >= N次
         self.daily_bars_count = 260  # 获取日K数据条数（用于满足近1年涨停次数判断）
         
         # 买入信号配置
