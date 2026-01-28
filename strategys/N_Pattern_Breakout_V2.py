@@ -223,13 +223,15 @@ class NPatternBreakoutV2(BaseStrategy):
     def buy_signal(self, stock_code: str, bars) -> Optional[Dict]:
         """
         生成买入信号:
-        1. 当前在日内分时MACD底部
-        2. 当前动态日线MACD为红柱且高于昨日
-        3. 当日最高价格突破过昨日实体上沿价格
-        4. 当前价格不低于最近一次MA5顶部价格
-        5. 当前价格位于T日收盘价±N%之间（可配置：t_day_price_range）
-        6. 当前价格不低于分时均价
-        7. 当日最高涨幅应小于N%（可配置：max_daily_change_rate）
+        （按计算成本由低到高检测）
+        1. 不在持仓中，且分时/缓存数据完备
+        2. 当前价 >= 最近一次 MA5 顶部价（盘前缓存）
+        3. 当前价在 T 日收盘价 ±N%（可配置：t_day_price_range）
+        4. 当日最高价突破昨日实体上沿
+        5. 当日最高涨幅 < N%（可配置：max_daily_change_rate）
+        6. 当前价 >= 分时均价（成交量加权均价）
+        7. 分时 MACD 底部
+        8. 动态日线 MACD 红柱且高于昨日
         
         Args:
             stock_code (str): 股票代码
@@ -238,11 +240,17 @@ class NPatternBreakoutV2(BaseStrategy):
         Returns:
             Optional[Dict]: 买入信号字典，无信号返回 None
         """
-        # 判断是否已持仓
+        # 0) 持仓过滤
         if stock_code in self.broker.positions:
             return None
+
+        # 0) 数据完备性校验
+        if bars is None or getattr(bars, "empty", True):
+            return None
+        if len(bars) < 1:
+            return None
         
-        # 检查缓存数据
+        # 0) 缓存校验
         if stock_code not in self.cached or 'daily_bar' not in self.cached[stock_code]:
             return None
         
@@ -251,14 +259,54 @@ class NPatternBreakoutV2(BaseStrategy):
             return None
         
         current_price = bars.iloc[-1]['close']
+
+        # 1) 当前价 >= 最近一次 MA5 顶部价（缓存）
+        last_ma5_top_price = self.cached[stock_code].get('last_ma5_top_price')
+        if last_ma5_top_price is None or current_price < last_ma5_top_price:
+            return None
+
+        # 2) 当前价在 T 日收盘价 ±N%（缓存）
+        t_day_close = self.cached[stock_code].get('t_day_close')
+        if t_day_close is None:
+            return None
+        price_lower = t_day_close * (1 - self.t_day_price_range)
+        price_upper = t_day_close * (1 + self.t_day_price_range)
+        if current_price < price_lower or current_price > price_upper:
+            return None
+
+        # 3) 准备昨日数据（用于突破/涨幅）
+        yesterday_bar = daily_bar.iloc[-1]
+        yesterday_close = yesterday_bar['close']
+
+        # 3) 当日最高价（复用）
         current_high = bars['high'].max()
-        
-        # 1. 当前在日内分时MACD底部
+
+        # 3) 当日最高价突破昨日实体上沿
+        yesterday_entity_top = max(yesterday_bar['open'], yesterday_bar['close'])
+        if current_high <= yesterday_entity_top:
+            return None
+
+        # 4) 最高涨幅 < N%
+        if yesterday_close <= 0:
+            return None
+        max_change_rate = (current_high - yesterday_close) / yesterday_close
+        if max_change_rate >= self.max_daily_change_rate:
+            return None
+
+        # 5) 当前价 >= 分时均价（成交量加权均价）
+        total_volume = bars['volume'].sum()
+        if total_volume > 0:
+            total_amount = bars['amount'].sum()
+            avg_price = total_amount / total_volume
+            if current_price < avg_price:
+                return None
+
+        # 6) 分时 MACD 底部（昂贵）
         macd_data = get_macd(bars)
         if not is_macd_bottom(macd_data):
             return None
-        
-        # 2. 当前动态日线MACD为红柱且高于昨日
+
+        # 7) 动态日线 MACD 红柱且高于昨日（昂贵）
         dynamic_daily_kline = get_dynamic_daily_kline(bars)
         if dynamic_daily_kline.empty:
             return None
@@ -269,40 +317,6 @@ class NPatternBreakoutV2(BaseStrategy):
         today_macd = dynamic_macd.iloc[-1]['macd']
         yesterday_macd = dynamic_macd.iloc[-2]['macd']
         if today_macd <= 0 or today_macd <= yesterday_macd:
-            return None
-        
-        # 3. 当日最高价格突破过昨日实体上沿价格
-        yesterday_bar = daily_bar.iloc[-1]
-        yesterday_entity_top = max(yesterday_bar['open'], yesterday_bar['close'])
-        if current_high <= yesterday_entity_top:
-            return None
-        
-        # 4. 当前价格不低于最近一次MA5顶部价格
-        last_ma5_top_price = self.cached[stock_code].get('last_ma5_top_price')
-        if last_ma5_top_price is None or current_price < last_ma5_top_price:
-            return None
-        
-        # 5. 当前价格位于T日收盘价±N%之间
-        t_day_close = self.cached[stock_code].get('t_day_close')
-        if t_day_close is None:
-            return None
-        price_lower = t_day_close * (1 - self.t_day_price_range)
-        price_upper = t_day_close * (1 + self.t_day_price_range)
-        if current_price < price_lower or current_price > price_upper:
-            return None
-        
-        # 6. 当前价格不低于分时均价（成交量加权平均价）
-        total_amount = bars['amount'].sum()
-        total_volume = bars['volume'].sum()
-        if total_volume > 0:
-            avg_price = total_amount / total_volume
-            if current_price < avg_price:
-                return None
-        
-        # 7. 当日最高涨幅应小于N%
-        yesterday_close = yesterday_bar['close']
-        max_change_rate = (current_high - yesterday_close) / yesterday_close
-        if max_change_rate >= self.max_daily_change_rate:
             return None
         
         # 所有条件满足，生成买入信号
