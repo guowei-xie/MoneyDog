@@ -37,6 +37,7 @@ class Broker:
         action = signal['action']
         time = signal['time']
         desc = signal['desc']
+        minute_k_count = int(signal.get('minute_k_count', 0) or 0)
         # 计算买入金额
         total_cost = price * volume
         # 计算佣金
@@ -58,7 +59,18 @@ class Broker:
         # 更新可用资金
         self.available_amount -= cost_all
         # 记录交易
-        self.record_transaction(stock_code, price, volume, action, price, commission, 0, time, desc)
+        self.record_transaction(
+            stock_code=stock_code,
+            price=price,
+            volume=volume,
+            action=action,
+            cost_price=price,
+            commission=commission,
+            tax=0,
+            time=time,
+            desc=desc,
+            minute_k_count=minute_k_count,
+        )
         info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
@@ -78,6 +90,7 @@ class Broker:
         action = signal['action']
         time = signal['time']
         desc = signal['desc']
+        minute_k_count = int(signal.get('minute_k_count', 0) or 0)
         
         # 计算可用仓位
         available_volume = self.get_available_volume(stock_code)
@@ -94,7 +107,18 @@ class Broker:
         # 更新可用资金
         self.available_amount += total_cost - commission - tax
         # 记录交易
-        self.record_transaction(stock_code, price, volume, action, price, commission, tax, time, desc)
+        self.record_transaction(
+            stock_code=stock_code,
+            price=price,
+            volume=volume,
+            action=action,
+            cost_price=price,
+            commission=commission,
+            tax=tax,
+            time=time,
+            desc=desc,
+            minute_k_count=minute_k_count,
+        )
         info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，印花税: {round(tax, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
@@ -255,19 +279,34 @@ class Broker:
         """
         return (self.get_total_assets() / self.initial_amount - 1) * 100
 
-    def record_transaction(self, stock_code: str, price: float, volume: int, action: str, cost_price: float, commission: float, tax: float, time: str, desc: str = "") -> bool:
+    def record_transaction(
+        self,
+        stock_code: str,
+        price: float,
+        volume: int,
+        action: str,
+        cost_price: float,
+        commission: float,
+        tax: float,
+        time: str,
+        desc: str = "",
+        minute_k_count: int = 0,
+    ) -> bool:
         """
-        记录每笔交易
+        记录每笔交易。
+
         Args:
             stock_code: 股票代码
             price: 价格
             volume: 股数
-            action: 操作类型（buy或sell）
+            action: 操作类型（buy 或 sell）
             cost_price: 成本价格
             commission: 佣金
             tax: 印花税
-            time: 交易时间
-            desc: 描述
+            time: 交易时间（原始时间字符串）
+            desc: 描述/原因
+            minute_k_count: 当日截至当前的分时 K 线数量（用于后续分析卖点）
+
         Returns:
             bool: 是否成功
         """
@@ -281,7 +320,8 @@ class Broker:
             'tax': tax,
             'time': time,
             'time_str': time_str_to_datetime(time),
-            'desc': desc
+            'desc': desc,
+            'minute_k_count': minute_k_count,
         })
         return True
      

@@ -189,6 +189,7 @@ class DualMomentumBreakout(BaseStrategy):
             'stock_code': stock_code,
             'price': bars.iloc[-1]['close'],
             'volume': self.broker.get_buy_volume(bars.iloc[-1]['close']),
+            'minute_k_count': len(bars),
             'time': bars.index[-1],
             'desc': ""
         }
@@ -280,6 +281,7 @@ class DualMomentumBreakout(BaseStrategy):
                     'stock_code': stock_code,
                     'price': bars.iloc[-1]['close'],
                     'volume': sell_volume,
+                    'minute_k_count': len(bars),
                     'time': bars.index[-1],
                     'desc': f"组合1- （{int(signal_1)} | {int(signal_2)} | {int(signal_3)} | {int(signal_7)}） & {int(signal_5)}"
                 }
@@ -291,6 +293,7 @@ class DualMomentumBreakout(BaseStrategy):
                 'stock_code': stock_code,
                 'price': bars.iloc[-1]['close'],
                 'volume': available_volume,
+                'minute_k_count': len(bars),
                 'time': bars.index[-1],
                 'desc': f"组合2- （{int(signal_4)} | {int(signal_5)}） & {int(signal_5_2)}"
             }

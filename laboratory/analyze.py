@@ -9,6 +9,28 @@ from utils.util import time_str_to_datetime, get_date_interval, get_trade_days_i
 from utils.logger import info
 from utils.data import get_trade_calendar
 
+
+def minute_k_count_to_time(k_count: int) -> str:
+    """
+    将当日分时K线数量（1~240）转换为A股交易时间字符串。
+    规则：上午 9:30-11:30 共120根，下午 13:00-15:00 共120根；
+    第n根对应该分钟结束时刻，如第30根即10:00，第240根即15:00。
+    Args:
+        k_count: 当日累计分时K线数量（1-240）
+    Returns:
+        str: 时间字符串 "HH:MM"，超出范围则返回 "HH:MM" 边界值
+    """
+    k_count = max(1, min(240, int(k_count)))
+    if k_count <= 120:
+        # 上午：9:30 + k_count 分钟
+        total_minutes = 9 * 60 + 30 + k_count
+    else:
+        # 下午：13:00 + (k_count - 120) 分钟
+        total_minutes = 13 * 60 + (k_count - 120)
+    h, m = divmod(total_minutes, 60)
+    return f"{h:02d}:{m:02d}"
+
+
 def analyze_account_changes(position_and_account_changes: list = None, file_path: str = "") -> pd.DataFrame:
     """
     分析账户变动记录，输出统计结果。
@@ -157,6 +179,44 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
                 pd.unique(np.array([str(x).strip() for x in sell_df['desc'] if pd.notna(x) and str(x).strip() != ""]))
             )
 
+            # 交易过程备注：优先使用“分时K线数量”替代时间，记录从建仓到清仓的建仓/卖出全过程及原因
+            remarks_parts = []
+            has_minute_k = 'minute_k_count' in buy_df.columns and 'minute_k_count' in sell_df.columns
+
+            def _build_prefix(row):
+                """生成单笔交易的备注前缀（优先用分时K线数量推算时间，其次回退到原始时间）。"""
+                if has_minute_k and pd.notna(row.get("minute_k_count", None)):
+                    try:
+                        k_count = int(row.get("minute_k_count"))
+                    except (TypeError, ValueError):
+                        k_count = None
+                    if k_count is not None:
+                        time_str = minute_k_count_to_time(k_count)
+                        return f"{time_str}："
+                # 兼容旧数据，退回到时间字符串
+                trade_time = time_str_to_datetime(row["time"])
+                return f"{trade_time}："
+
+            # 1) 建仓阶段（可能多笔）
+            for _, row in buy_df.iterrows():
+                desc = str(row.get("desc", "")).strip()
+                prefix = _build_prefix(row)
+                if desc:
+                    remarks_parts.append(f"{prefix}建仓 - {desc}")
+                else:
+                    remarks_parts.append(f"{prefix}建仓 - 无备注")
+
+            # 2) 卖出阶段（可能多笔）
+            for _, row in sell_df.iterrows():
+                desc = str(row.get("desc", "")).strip()
+                prefix = _build_prefix(row)
+                if desc:
+                    remarks_parts.append(f"{prefix}卖出 - {desc}")
+                else:
+                    remarks_parts.append(f"{prefix}卖出 - 无备注")
+
+            sell_remarks = " | ".join(remarks_parts)
+
             # 总手续费/印花税
             total_commission = buy_df['commission'].sum() + sell_df['commission'].sum()
             total_tax = sell_df['tax'].sum()
@@ -170,6 +230,7 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
                 "清仓时间": time_str_to_datetime(close_t),
                 "清仓价格": round(cp, 2),
                 "卖出信号": sell_desc,
+                "备注": sell_remarks,
                 "涨跌幅": round(rate, 4),
                 "持仓天数": hold_days,
                 "总手续费": total_commission,
@@ -178,7 +239,22 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
             })
             # 卖完后自动进入下一个完整周期（有多段会被while循环依次分析）
 
-    result = pd.DataFrame(records, columns=["股票代码", "建仓时间", "建仓价格", "清仓时间", "清仓价格", "涨跌幅", "持仓天数", "总手续费", "总印花税", "总成本"])
+    result = pd.DataFrame(
+        records,
+        columns=[
+            "股票代码",
+            "建仓时间",
+            "建仓价格",
+            "清仓时间",
+            "清仓价格",
+            "涨跌幅",
+            "持仓天数",
+            "总手续费",
+            "总印花税",
+            "总成本",
+            "备注",
+        ],
+    )
     fname = f"results/analyze_transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     result.to_excel(fname, index=False)
 

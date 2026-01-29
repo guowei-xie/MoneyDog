@@ -230,26 +230,54 @@ class BaseStrategy(ABC):
     @abstractmethod
     def buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
         """
-        买入信号生成
-        子类必须实现此方法
+        买入信号生成。
+
+        子类必须实现此方法，并返回统一格式的信号字典。
+
         Args:
             stock_code: 股票代码
             bars: 分时K线快照（DataFrame）
+
         Returns:
-            Optional[Dict]: 买入信号 {'action': 'buy', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time, 'desc': desc}，无信号返回None
+            Optional[Dict]:
+                买入信号:
+                {
+                    'action': 'buy',
+                    'stock_code': stock_code,
+                    'price': price,
+                    'volume': volume,
+                    'time': time,
+                    'desc': desc,
+                    'minute_k_count': int  # 当日截至当前的分时K线数量
+                }
+                无信号返回 None。
         """
         pass
-
+        
     @abstractmethod
     def sell_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
         """
-        卖出信号生成
-        子类必须实现此方法
+        卖出信号生成。
+
+        子类必须实现此方法，并返回统一格式的信号字典。
+
         Args:
             stock_code: 股票代码
             bars: 分时K线快照（DataFrame）
+
         Returns:
-            Optional[Dict]: 卖出信号 {'action': 'sell', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time, 'desc': desc}，无信号返回None
+            Optional[Dict]:
+                卖出信号:
+                {
+                    'action': 'sell',
+                    'stock_code': stock_code,
+                    'price': price,
+                    'volume': volume,
+                    'time': time,
+                    'desc': desc,
+                    'minute_k_count': int  # 当日截至当前的分时K线数量
+                }
+                无信号返回 None。
         """
         pass
 
@@ -257,7 +285,16 @@ class BaseStrategy(ABC):
         """
         执行交易
         Args:
-            signal: 交易信号 {'action': 'buy'/'sell', 'stock_code': stock_code, 'price': price, 'volume': volume, 'time': time, 'desc': desc}
+            signal: 交易信号:
+                {
+                    'action': 'buy'/'sell',
+                    'stock_code': stock_code,
+                    'price': price,
+                    'volume': volume,
+                    'time': time,
+                    'desc': desc,
+                    'minute_k_count': int  # 当日截至当前的分时K线数量
+                }
         Returns:
             bool: 是否成功
         """

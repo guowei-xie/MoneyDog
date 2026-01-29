@@ -195,6 +195,7 @@ class NPatternBreakout(BaseStrategy):
                 'stock_code': stock_code,
                 'price': buy_price,
                 'volume': buy_volume,
+                'minute_k_count': len(bars),
                 'time': bars.index[-1],
                 'desc': f"信号:{int(signal_1)}{int(signal_2)}{int(signal_3)}{int(signal_4)}"
             }
@@ -361,6 +362,7 @@ class NPatternBreakout(BaseStrategy):
                     'stock_code': stock_code,
                     'price': bars.iloc[-1]['close'],
                     'volume': sell_volume,
+                    'minute_k_count': len(bars),
                     'time': bars.index[-1],
                     'desc': f"组合1: （{int(signal_1)} | {int(signal_2)} | {int(signal_6)} | {int(signal_7)}） & {int(signal_4)}"
                 }
@@ -372,6 +374,7 @@ class NPatternBreakout(BaseStrategy):
                 'stock_code': stock_code,
                 'price': bars.iloc[-1]['close'],
                 'volume': available_volume,
+                'minute_k_count': len(bars),
                 'time': bars.index[-1],
                 'desc': f"组合2: {int(signal_3)} & {int(signal_4_2)}"
             }
@@ -383,6 +386,7 @@ class NPatternBreakout(BaseStrategy):
                 'stock_code': stock_code,
                 'price': bars.iloc[-1]['close'],
                 'volume': available_volume,
+                'minute_k_count': len(bars),
                 'time': bars.index[-1],
                 'desc': f"组合3: {int(signal_5)}"
             }

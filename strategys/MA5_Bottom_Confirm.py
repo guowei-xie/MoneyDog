@@ -167,6 +167,7 @@ class MA5BottomConfirm(BaseStrategy):
             'stock_code': stock_code,
             'price': bars.iloc[-1]['close'],
             'volume': self.broker.get_buy_volume(bars.iloc[-1]['close']),
+            'minute_k_count': len(bars),
             'time': bars.index[-1], 
             'desc': "第1分钟买入"
         }
@@ -194,6 +195,7 @@ class MA5BottomConfirm(BaseStrategy):
                 'stock_code': stock_code,
                 'price': bars.iloc[-1]['close'],
                 'volume': available_volume,
+                'minute_k_count': len(bars),
                 'time': bars.index[-1],
                 'desc': "止盈-日线MACD红柱缩短&低于昨收(14:30后)"
             }
@@ -325,6 +327,7 @@ class MA5BottomConfirm(BaseStrategy):
                     'stock_code': stock_code,
                     'price': current_price,
                     'volume': available_volume,
+                        'minute_k_count': len(bars),
                     'time': bars.index[-1],
                     'desc': f"止损-价格跌破止损线(止损线:{stop_loss_price:.2f}, 建仓价:{build_price:.2f})"
                 }

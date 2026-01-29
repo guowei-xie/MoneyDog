@@ -364,6 +364,7 @@ class NPatternBreakoutV2(BaseStrategy):
                 'stock_code': stock_code,
                 'price': current_price,
                 'volume': buy_volume,
+                'minute_k_count': len(bars),
                 'time': bars.index[-1],
                 'desc': ''
             }
@@ -478,6 +479,7 @@ class NPatternBreakoutV2(BaseStrategy):
             'stock_code': stock_code,
             'price': current_price,
             'volume': int(available_volume),
+            'minute_k_count': len(bars),
             'time': bars.index[-1],
             'desc': '止盈（炸板）'
         }
@@ -495,8 +497,8 @@ class NPatternBreakoutV2(BaseStrategy):
         current_macd = float(top_ctx['current_macd'])
 
         cost_price = float(self.broker.get_position_cost_price(stock_code))
-        if not (cost_price > 0 and current_price > cost_price):
-            return None
+        # if not (cost_price > 0 and current_price > cost_price):
+        #     return None
 
         yesterday_bar = daily_bar.iloc[-1]
         yesterday_close = float(yesterday_bar['close'])
@@ -536,6 +538,7 @@ class NPatternBreakoutV2(BaseStrategy):
             'stock_code': stock_code,
             'price': current_price,
             'volume': int(sell_volume),
+            'minute_k_count': len(bars),
             'time': bars.index[-1],
             'desc': '止盈（常规）'
         }
@@ -565,6 +568,7 @@ class NPatternBreakoutV2(BaseStrategy):
             'stock_code': stock_code,
             'price': current_price,
             'volume': int(sell_volume),
+            'minute_k_count': len(bars),
             'time': bars.index[-1],
             'desc': '止损（常规）'
         }
