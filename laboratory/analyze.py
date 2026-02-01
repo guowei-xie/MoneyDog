@@ -73,6 +73,12 @@ def analyze_account_changes(position_and_account_changes: list = None, file_path
     max_loss_rate = (df['total_assets'].cummin() / initial - 1).min()
     roll_max = df['total_assets'].cummax()
     max_drawdown = (df['total_assets'] / roll_max - 1).min()
+    # 夏普比率：基于日收益率年化，无风险利率取 0
+    daily_returns = df['total_assets'].pct_change().dropna()
+    if len(daily_returns) > 0 and daily_returns.std() > 0:
+        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+    else:
+        sharpe_ratio = np.nan
     max_stock_count = df['stock_count'].max()
     safe_total_assets = df['total_assets'].replace(0, pd.NA)
     max_position_rate = (df['stock_value'] / safe_total_assets).max()
@@ -84,6 +90,7 @@ def analyze_account_changes(position_and_account_changes: list = None, file_path
     info(f"最终资金: {final:,.2f} 元")
     info(f"盈利率: {profit_rate*100:.2f}%")
     info(f"最大回撤: {max_drawdown*100:.2f}%")
+    info(f"夏普比率(年化): {sharpe_ratio:.4f}" if pd.notnull(sharpe_ratio) else "夏普比率(年化): 无法计算")
     info(f"最大涨幅: {max_profit_rate*100:.2f}%")
     info(f"最大跌幅: {max_loss_rate*100:.2f}%")
     info(f"最大持仓股票数: {max_stock_count}")
@@ -95,6 +102,7 @@ def analyze_account_changes(position_and_account_changes: list = None, file_path
         "final_assets": final,
         "profit_rate": profit_rate,
         "max_drawdown": max_drawdown,
+        "sharpe_ratio": sharpe_ratio,
         "max_profit_rate": max_profit_rate,
         "max_loss_rate": max_loss_rate,
         "max_stock_count": max_stock_count,

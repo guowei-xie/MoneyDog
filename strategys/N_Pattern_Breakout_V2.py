@@ -47,7 +47,7 @@ class NPatternBreakoutV2(BaseStrategy):
         self.sell_volume_expand_rate_build_day = 0.30  # 组合A条件：建仓日昨日成交量放大阈值（>=30%）
         
         # 选股条件配置
-        self.limit_check_days = 7  # 近N个交易日内存在涨停板
+        self.limit_check_days = 5  # 近N个交易日内存在涨停板
         self.max_limit_board = 2  # 最多N板（首板或二板）
         self.min_days_after_limit = 3  # 最新交易日距离T日 >= N 个交易日
         self.volume_check_days = 20  # 近N日最大成交量检查
