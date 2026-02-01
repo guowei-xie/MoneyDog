@@ -38,6 +38,7 @@ class NPatternBreakoutV2(BaseStrategy):
         
         # 卖出配置
         self.batch_sell_count = 2  # 卖出时分批次数
+        self.rigid_stop_loss_rate = 0.07  # 刚性止损：亏损达到该比例时现价清仓（0.07=7%），可配置
         self.sell_macd_min_bars = 5  # MACD 顶点/底部判定所需最少分时K线数量
         self.sell_broken_limit_gap_minutes = 3  # 炸板判定：距离最近一次封板的分钟数 >= N（3分钟未回封）
         self.sell_yesterday_max_change_rate = 0.08  # 组合A条件：昨日最大涨幅阈值（>=8%）
@@ -46,14 +47,14 @@ class NPatternBreakoutV2(BaseStrategy):
         self.sell_volume_expand_rate_build_day = 0.30  # 组合A条件：建仓日昨日成交量放大阈值（>=30%）
         
         # 选股条件配置
-        self.limit_check_days = 5  # 近N个交易日内存在涨停板
+        self.limit_check_days = 7  # 近N个交易日内存在涨停板
         self.max_limit_board = 2  # 最多N板（首板或二板）
         self.min_days_after_limit = 3  # 最新交易日距离T日 >= N 个交易日
         self.volume_check_days = 20  # 近N日最大成交量检查
-        self.amplitude_check_days = 20  # 近N日区间振幅检查
-        self.max_amplitude = 0.5  # 最大振幅（最高价/最低价-1）
+        self.amplitude_check_days = 90  # 近N日区间振幅检查
+        self.max_amplitude = 1.0  # 最大振幅（最高价/最低价-1）
         self.limit_count_check_days = 250  # 近N个交易日（约1年）统计涨停次数
-        self.min_limit_count = 6  # 近1年涨停次数 >= N次
+        self.min_limit_count = 5  # 近1年涨停次数 >= N次
         self.daily_bars_count = 260  # 获取日K数据条数（用于满足近1年涨停次数判断）
         
         # 买入信号配置
@@ -445,6 +446,36 @@ class NPatternBreakoutV2(BaseStrategy):
         plan_sell_volume = available_volume / batch_sell_count
         return int(convert_to_safe_sell_volume(plan_sell_volume, available_volume))
 
+    def _sell_rigid_stop_loss(self, stock_code: str, bars: pd.DataFrame, available_volume: int) -> Optional[Dict]:
+        """
+        刚性止损：当持仓亏损达到配置比例（如 5%）时，现价清仓。
+
+        Args:
+            stock_code (str): 股票代码
+            bars (pd.DataFrame): 分时K线快照
+            available_volume (int): 可卖数量
+
+        Returns:
+            Optional[Dict]: 卖出信号，无信号返回 None
+        """
+        cost_price = float(self.broker.get_position_cost_price(stock_code))
+        if cost_price <= 0:
+            return None
+        current_price = float(bars.iloc[-1]['close'])
+        loss_rate = (cost_price - current_price) / cost_price
+        if loss_rate < self.rigid_stop_loss_rate:
+            return None
+        info(f"{stock_code} 触发刚性止损: 亏损率={loss_rate:.2%}, 阈值={self.rigid_stop_loss_rate:.2%}")
+        return {
+            'action': 'sell',
+            'stock_code': stock_code,
+            'price': current_price,
+            'volume': int(available_volume),
+            'minute_k_count': len(bars),
+            'time': bars.index[-1],
+            'desc': '刚性止损'
+        }
+
     def _sell_combo_b_broken_limit(self, stock_code: str, bars: pd.DataFrame, yesterday_close: float, available_volume: int) -> Optional[Dict]:
         """
         组合B：炸板清仓（3分钟未回封）。
@@ -594,6 +625,9 @@ class NPatternBreakoutV2(BaseStrategy):
         组合B（清仓止盈卖出）:
             1. 炸板（3分钟未回封，即间隔最近一根涨停k线数量>=3）
 
+        刚性止损（清仓卖出）:
+            1. 持仓亏损达到配置比例（如 5%）时，现价清仓
+
         组合C（分批止损卖出）:
             1. 以最近一次MA5顶部价格作为支撑位，跌破支撑位
             2. 且当分时MACD出现顶点，并且符合以下任意条件：
@@ -639,17 +673,22 @@ class NPatternBreakoutV2(BaseStrategy):
         if signal_b is not None:
             return signal_b
 
-        # 2) MACD 顶点过滤（A/C 都需要）
+        # 2) 刚性止损：亏损达到阈值时现价清仓（不依赖 MACD）
+        signal_rigid = self._sell_rigid_stop_loss(stock_code, bars, available_volume)
+        if signal_rigid is not None:
+            return signal_rigid
+
+        # 3) MACD 顶点过滤（A/C 都需要）
         top_ctx = self._check_macd_top_gate(stock_code, bars)
         if top_ctx is None:
             return None
 
-        # 3) 组合A：分批止盈
+        # 4) 组合A：分批止盈
         signal_a = self._sell_combo_a_take_profit(stock_code, bars, daily_bar, available_volume, top_ctx)
         if signal_a is not None:
             return signal_a
 
-        # 4) 组合C：分批止损
+        # 5) 组合C：分批止损
         signal_c = self._sell_combo_c_stop_loss(stock_code, bars, available_volume, top_ctx)
         if signal_c is not None:
             return signal_c
