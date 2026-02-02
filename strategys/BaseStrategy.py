@@ -8,9 +8,10 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 
 import pandas as pd
+from tqdm import tqdm
 
 from utils.data import get_stock_list_in_main_board, get_trade_calendar
-from utils.logger import info
+from utils.logger import info, debug
 from utils.util import generate_minute_snapshot, get_elapsed_time_str, add_num_date_days
 from utils.broker import Broker
 from laboratory.analyze import analyze_buy_and_sell_record, analyze_account_changes
@@ -53,13 +54,14 @@ class BaseStrategy(ABC):
         """
         self.prepare()
         # 遍历交易日历，逐日运行（最后一天不运行）
-        for trade_date in self.trade_calendar[:-1]:
+        trade_days = self.trade_calendar[:-1]
+        for trade_date in tqdm(trade_days, desc="回测进度", unit="日"):
             proceed = self.before_open(trade_date)
             if proceed:
                 for minute_snapshot in self.minute_snapshots:
                     self.on_minute(minute_snapshot)
             self.after_close(trade_date)
-            info("=" * 100)
+            debug("=" * 100)
         self.end_of_backtest()
         return True
 
@@ -98,10 +100,10 @@ class BaseStrategy(ABC):
         Returns:
             bool: 是否继续运行当日策略
         """
-        info(f"策略开盘前运行: 【{add_num_date_days(trade_date, 1, self.trade_calendar)}】")
+        debug(f"策略开盘前运行: 【{add_num_date_days(trade_date, 1, self.trade_calendar)}】")
         
         # 资产概览
-        info(f"可用资金: {self.broker.available_amount:,.2f} 元，持仓价值: {self.broker.get_position_value():,.2f} 元，总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%")
+        debug(f"可用资金: {self.broker.available_amount:,.2f} 元，持仓价值: {self.broker.get_position_value():,.2f} 元，总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%")
         
         # 盘前清理：清除volume为0的持仓股票信息、解锁昨日所有被锁定的持仓
         self.broker.clean_position()
@@ -113,10 +115,10 @@ class BaseStrategy(ABC):
         # 2. 获取自选股票列表（预买入），过滤掉已经持仓的股票
         self.selected_stock_list = self.get_selected_stock_list(trade_date)
         self.selected_stock_list = [stock_code for stock_code in self.selected_stock_list if stock_code not in self.holding_stock_list]
-        info(f"自选股票列表（预买入）: {self.selected_stock_list}")
+        debug(f"自选股票列表（预买入）: {self.selected_stock_list}")
         
         if not self.selected_stock_list and not self.holding_stock_list:
-            info(f"没有自选股票和持仓股票，跳过策略开盘前运行")
+            debug(f"没有自选股票和持仓股票，跳过策略开盘前运行")
             self.minute_snapshots = []
             return False
         
@@ -140,8 +142,8 @@ class BaseStrategy(ABC):
         for stock_code, position in positions.items():
             if position.get('volume', 0) > 0:
                 result.append(stock_code)
-        info(f"获取持仓股票列表（预卖出）完成: {len(result)} 只股票")
-        info(f"持仓股票列表: {result}")
+        debug(f"获取持仓股票列表（预卖出）完成: {len(result)} 只股票")
+        debug(f"持仓股票列表: {result}")
         return result
 
     @abstractmethod
@@ -317,7 +319,7 @@ class BaseStrategy(ABC):
             minute_snapshot = self.minute_snapshots[-1]
             self.broker.update_position(minute_snapshot)
         else:
-            info(f"没有分时快照数据，跳过盘后更新持仓信息")
+            debug(f"没有分时快照数据，跳过盘后更新持仓信息")
         
         # 记录持仓和账户变化
         self.broker.record_position_and_account_change(trade_date)

@@ -71,7 +71,7 @@ class Broker:
             desc=desc,
             minute_k_count=minute_k_count,
         )
-        info(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
+        debug(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
         return True
@@ -119,7 +119,7 @@ class Broker:
             desc=desc,
             minute_k_count=minute_k_count,
         )
-        info(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，印花税: {round(tax, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
+        debug(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，印花税: {round(tax, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
         debug(f"当前可用资金: {self.available_amount}")
         debug(f"当前持仓: {self.positions}")
         return True

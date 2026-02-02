@@ -528,8 +528,8 @@ class NPatternBreakoutV2(BaseStrategy):
         current_macd = float(top_ctx['current_macd'])
 
         cost_price = float(self.broker.get_position_cost_price(stock_code))
-        # if not (cost_price > 0 and current_price > cost_price):
-        #     return None
+        if not (cost_price > 0 and current_price > cost_price):
+            return None
 
         yesterday_bar = daily_bar.iloc[-1]
         yesterday_close = float(yesterday_bar['close'])
