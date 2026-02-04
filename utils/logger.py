@@ -17,7 +17,7 @@ class Logger:
     提供统一的日志记录功能，支持多种输出方式和配置化管理
     """
     
-    def __init__(self, name: str = "MoneyDog", config_file: str = "config.ini"):
+    def __init__(self, name: str = "", config_file: str = "config.ini"):
         """
         初始化日志器
         

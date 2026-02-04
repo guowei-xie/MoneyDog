@@ -465,7 +465,7 @@ class NPatternBreakoutV2(BaseStrategy):
         loss_rate = (cost_price - current_price) / cost_price
         if loss_rate < self.rigid_stop_loss_rate:
             return None
-        info(f"{stock_code} 触发刚性止损: 亏损率={loss_rate:.2%}, 阈值={self.rigid_stop_loss_rate:.2%}")
+        debug(f"{stock_code} 触发刚性止损: 亏损率={loss_rate:.2%}, 阈值={self.rigid_stop_loss_rate:.2%}")
         return {
             'action': 'sell',
             'stock_code': stock_code,
@@ -504,7 +504,7 @@ class NPatternBreakoutV2(BaseStrategy):
         if gap < self.sell_broken_limit_gap_minutes:
             return None
 
-        info(f"{stock_code} 触发炸板清仓: gap={gap}")
+        debug(f"{stock_code} 触发炸板清仓: gap={gap}")
         return {
             'action': 'sell',
             'stock_code': stock_code,

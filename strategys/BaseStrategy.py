@@ -336,9 +336,12 @@ class BaseStrategy(ABC):
         self.broker.download_transactions()
         self.broker.download_position_and_account_changes()
         
-        # 分析数据
-        analyze_account_changes(position_and_account_changes=self.broker.position_and_account_changes)
-        analyze_buy_and_sell_record(transactions=self.broker.transactions)
+        # 先分析交易记录，再分析账户变动（传入交易结果以绘制按买入日个股盈利率图）
+        tx_result = analyze_buy_and_sell_record(transactions=self.broker.transactions)
+        analyze_account_changes(
+            position_and_account_changes=self.broker.position_and_account_changes,
+            transactions_df=tx_result,
+        )
         
         info(f"回测结束，运行耗时: {get_elapsed_time_str(self.start_time)}")
         return True
