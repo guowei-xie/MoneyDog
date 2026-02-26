@@ -108,7 +108,7 @@ class NPatternBottom(BaseStrategy):
         Returns:
             List[str]: 自选股票列表
         """
-        daily_bars = get_daily_bars(stock_list=self.global_stock_list, period="1d", end_time=trade_date, count=90)
+        daily_bars = self.get_daily_bars_for_selection(trade_date, 90)
         result = []
         for stock_code, daily_bar in daily_bars.items():
             if self._select_stock(stock_code, daily_bar):

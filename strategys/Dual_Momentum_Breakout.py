@@ -27,7 +27,7 @@ class DualMomentumBreakout(BaseStrategy):
         Returns:
             List[str]: 自选股票列表
         """
-        daily_bars = get_daily_bars(stock_list=self.global_stock_list, period="1d", end_time=trade_date, count=90)
+        daily_bars = self.get_daily_bars_for_selection(trade_date, 90)
         index_daily_bars = get_daily_bars(stock_list=['000001.SH'], period="1d", end_time=trade_date, count=90, table_name='index_daily')
         # 计算大盘指数ma5斜率
         index_daily_bars_close_last_5 = index_daily_bars['000001.SH']['close'].iloc[-5:]

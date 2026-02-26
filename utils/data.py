@@ -2,7 +2,6 @@
 数据工具模块
 提供数据处理和获取功能
 """
-
 import pandas as pd
 import akshare as ak
 # from xtquant import xtdata
@@ -11,6 +10,7 @@ from utils.util import get_stock_market_type, add_stock_suffix_list
 from tqdm import tqdm
 from utils.duckdb import DuckDBHelper
 from utils.util import date_to_timestamp, timestamp_to_date, timestamp_to_time
+
 duckdb_helper = DuckDBHelper()
 
 # 获取交易日历
@@ -161,3 +161,35 @@ def get_daily_bars(
                   for code, group_df in df_all.groupby('code', sort=False)}
     
     return daily_bars
+
+
+def get_daily_bars_from_cache(
+    cache: dict,
+    stock_list: list,
+    end_time: str,
+    count: int,
+) -> dict:
+    """
+    从内存中的日线全量缓存按 end_time、count 切片，返回与 get_daily_bars 相同结构。
+    用于多线程选股时避免重复访问 DuckDB。
+    Args:
+        cache: 全量日线缓存 {stock_code: DataFrame}，DataFrame.index 为 'YYYYMMDD'
+        stock_list: 股票列表
+        end_time: 截止日期（含），如 '20241130'
+        count: 从 end_time 往前取条数，-1 表示全部
+    Returns:
+        dict: {stock_code: DataFrame}，与 get_daily_bars(..., end_time=end_time, count=count) 一致
+    """
+    result = {}
+    for code in stock_list:
+        df = cache.get(code)
+        if df is None or df.empty:
+            result[code] = pd.DataFrame()
+            continue
+        # index 为 'YYYYMMDD'，取 index <= end_time 再按 count 截断
+        mask = df.index <= end_time
+        sliced = df.loc[mask]
+        if count > 0:
+            sliced = sliced.tail(count)
+        result[code] = sliced
+    return result

@@ -8,6 +8,7 @@ MoneyDog(旺财) 是一个基于 **Python + 本地 DuckDB 数据库** 的量化�
 - **策略基类架构**: 提供 `BaseStrategy` 基类，简化策略开发流程
 - **策略可配置**: 通过配置文件切换策略，无需修改代码
 - **策略回测**: 按交易日逐日回放，支持分钟级分时回测
+- **多线程选股**: 回测前一次性加载日线全量到内存，按交易日多线程预选股并缓存，遍历交易日时直接取用，提升回测效率
 - **技术分析**: 内置多种 K 线、均线、量能、MACD 等技术指标与图形识别算法
 - **模拟交易**: 支持资金管理、持仓管理、佣金与印花税精细计算
 - **数据管理**: 使用 DuckDB 本地库 (`data/stock.duckdb`) 存储日线与分钟线行情
@@ -161,6 +162,9 @@ limit_vol_type = amount
 max_vol_rate = 0.05
 # 当 limit_vol_type = amount 时生效（如 100000 表示单股最多 10 万）
 max_vol_amount = 100000
+
+# 多线程预选股线程数，0 表示自动（取 CPU 核数与交易日数较小值）
+batch_stock_selection_threads = 0
 ```
 
 ---
@@ -241,12 +245,14 @@ flowchart TD
     A[开始运行] --> B[prepare 准备阶段]
     B --> B1[获取交易日期列表]
     B1 --> B2[获取股票池]
-    B2 --> C{遍历交易日历}
+    B2 --> B3[加载日线全量到内存]
+    B3 --> B4[多线程预选股并缓存]
+    B4 --> C{遍历交易日历}
     
     C --> D[before_open 开盘前]
     D --> D1[清理持仓/解锁]
     D1 --> D2[获取持仓列表]
-    D2 --> D3[get_selected_stock_list<br/>子类实现: 选股逻辑]
+    D2 --> D3[取用预选股缓存或选股]
     D3 --> D4[set_cached<br/>子类实现: 缓存指标数据]
     D4 --> D5[生成分时快照]
     D5 --> D6{是否有股票?}
@@ -281,12 +287,14 @@ flowchart TD
 **准备阶段（prepare）**
 - 获取交易日期列表：根据配置的回测时间区间生成交易日历
 - 获取股票池：默认使用主板股票池，子类可重写 `_get_stock_list()` 方法
+- 加载日线全量到内存：一次性从 DuckDB 读取日线行情至 `_daily_bars_cache`，供选股只读
+- 多线程预选股：按交易日多线程调用子类 `get_selected_stock_list(trade_date)`，结果写入 `_selected_stock_by_date`，带进度条；线程数由配置 `batch_stock_selection_threads` 控制（0 为自动）
 
 **每日运行循环**
 - **开盘前（before_open）**：
   - 清理持仓：清除 volume 为 0 的持仓，解锁昨日被锁定的持仓
   - 获取持仓列表：当前持有的股票（预卖出）
-  - 获取自选列表：调用子类的 `get_selected_stock_list()` 方法筛选股票（预买入）
+  - 获取自选列表：优先从预选股缓存 `_selected_stock_by_date[trade_date]` 取用，若无缓存则调用子类 `get_selected_stock_list(trade_date)`
   - 缓存数据：调用子类的 `set_cached()` 方法计算并缓存技术指标
   - 生成分时快照：为当日回测准备分钟级行情数据
 
@@ -372,8 +380,8 @@ class MyStrategy(BaseStrategy):
 基类要求实现以下四个抽象方法：
 
 1. **`get_selected_stock_list(trade_date)`**：获取自选股票列表（预买入）
-   - 根据选股条件筛选股票
-   - 返回股票代码列表
+   - 根据选股条件筛选股票，返回股票代码列表
+   - 选股阶段应使用 `self.get_daily_bars_for_selection(trade_date, count)` 获取日线数据，以走内存缓存、配合多线程预选股
 
 2. **`set_cached(trade_date)`**：缓存盘前数据
    - 计算并缓存技术指标

@@ -71,8 +71,8 @@ class NPatternBreakoutV2(BaseStrategy):
         Returns:
             List[str]: 自选股票代码列表
         """
-        # 为满足「近1年涨停次数」判断，这里获取约1年的日K数据
-        daily_bars = get_daily_bars(stock_list=self.global_stock_list, period="1d", end_time=trade_date, count=self.daily_bars_count)
+        # 为满足「近1年涨停次数」判断，这里获取约1年的日K数据（预选股时走内存缓存，零 DB 访问）
+        daily_bars = self.get_daily_bars_for_selection(trade_date, self.daily_bars_count)
         result = []
         for stock_code, daily_bar in daily_bars.items():
             if self._select_stock(stock_code=stock_code, daily_bars=daily_bar):

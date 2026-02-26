@@ -2,15 +2,17 @@
 策略基类模块
 提供策略开发所需的基础框架和通用功能
 """
+import os
 import time
 import configparser
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 
 import pandas as pd
 from tqdm import tqdm
 
-from utils.data import get_stock_list_in_main_board, get_trade_calendar
+from utils.data import get_stock_list_in_main_board, get_trade_calendar, get_daily_bars, get_daily_bars_from_cache
 from utils.logger import info, debug
 from utils.util import generate_minute_snapshot, get_elapsed_time_str, add_num_date_days
 from utils.broker import Broker
@@ -35,6 +37,11 @@ class BaseStrategy(ABC):
         self.backtest_start_time = cfg.get('BACKTEST', 'backtest_start_time')
         self.backtest_end_time = cfg.get('BACKTEST', 'backtest_end_time')
         self.broker = Broker()
+        # 预选股线程数（0=自动）
+        try:
+            self._batch_stock_selection_threads = int(cfg.get('BACKTEST', 'batch_stock_selection_threads', fallback='0'))
+        except (TypeError, ValueError):
+            self._batch_stock_selection_threads = 0
         
         # 交易日历和股票池（在prepare中初始化）
         self.trade_calendar = []
@@ -45,6 +52,10 @@ class BaseStrategy(ABC):
         self.holding_stock_list = []   # 持仓股票列表（预卖出）
         self.cached = {}               # 缓存盘前数据
         self.minute_snapshots = []     # 分时快照数据
+        # 多线程预选股结果：{ trade_date: [stock_codes] }，由 prepare 中批量选股填充
+        self._selected_stock_by_date: Dict[str, List[str]] = {}
+        # 日线全量缓存，选股前一次性加载，多线程选股时只读此内存，不访问 DuckDB
+        self._daily_bars_cache: Optional[Dict] = None
 
     def run(self) -> bool:
         """
@@ -81,7 +92,70 @@ class BaseStrategy(ABC):
         self.global_stock_list = self._get_stock_list()
         info(f"获取股票池完成: {len(self.global_stock_list)} 只股票")
         
+        # 3. 多线程预选股并写入 _selected_stock_by_date
+        self._run_batch_stock_selection()
+        
         return True
+
+    def _run_batch_stock_selection(self) -> None:
+        """
+        对所有交易日多线程执行选股，结果写入 self._selected_stock_by_date。
+        选股前一次性加载日线全量到内存，多线程只读内存；线程数由配置 batch_stock_selection_threads 决定，0 为自动。
+        """
+        trade_days = self.trade_calendar[:-1]
+        if not trade_days:
+            return
+        self._selected_stock_by_date.clear()
+        # 选股前一次性加载日线全量到内存（主线程、单次 DuckDB 访问）
+        info("加载日线全量数据到内存...")
+        self._daily_bars_cache = get_daily_bars(
+            self.global_stock_list,
+            period="1d",
+            start_time="",
+            end_time=self.backtest_end_time,
+            count=-1,
+        )
+        info("日线全量数据加载完成")
+        if self._batch_stock_selection_threads > 0:
+            max_workers = min(self._batch_stock_selection_threads, len(trade_days))
+        else:
+            max_workers = min((os.cpu_count() or 4), len(trade_days))
+        info(f"开始多线程选股: 共 {len(trade_days)} 个交易日, 线程数 {max_workers}")
+        with tqdm(total=len(trade_days), desc="选股进度", unit="日") as pbar:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_date = {executor.submit(self.get_selected_stock_list, d): d for d in trade_days}
+                for future in as_completed(future_to_date):
+                    trade_date = future_to_date[future]
+                    try:
+                        self._selected_stock_by_date[trade_date] = future.result()
+                    except Exception as e:
+                        debug(f"选股异常 trade_date={trade_date}: {e}")
+                        self._selected_stock_by_date[trade_date] = []
+                    pbar.update(1)
+        info("多线程选股完成")
+
+    def get_daily_bars_for_selection(self, trade_date: str, count: int) -> dict:
+        """
+        选股用日线数据：有预选股缓存时从内存切片，否则调 get_daily_bars。子类选股时应使用本方法。
+        Args:
+            trade_date: 截止交易日期（含）
+            count: 从该日往前取条数
+        Returns:
+            dict: {stock_code: DataFrame}，与 get_daily_bars(..., end_time=trade_date, count=count) 一致
+        """
+        if self._daily_bars_cache is not None:
+            return get_daily_bars_from_cache(
+                self._daily_bars_cache,
+                self.global_stock_list,
+                trade_date,
+                count,
+            )
+        return get_daily_bars(
+            self.global_stock_list,
+            period="1d",
+            end_time=trade_date,
+            count=count,
+        )
 
     def _get_stock_list(self) -> List[str]:
         """
@@ -112,8 +186,11 @@ class BaseStrategy(ABC):
         # 1. 获取持仓股票列表（预卖出）
         self.holding_stock_list = self._get_holding_stock_list()
         
-        # 2. 获取自选股票列表（预买入），过滤掉已经持仓的股票
-        self.selected_stock_list = self.get_selected_stock_list(trade_date)
+        # 2. 获取自选股票列表（预买入），优先使用预选股缓存，再过滤掉已持仓
+        if self._selected_stock_by_date and trade_date in self._selected_stock_by_date:
+            self.selected_stock_list = self._selected_stock_by_date[trade_date]
+        else:
+            self.selected_stock_list = self.get_selected_stock_list(trade_date)
         self.selected_stock_list = [stock_code for stock_code in self.selected_stock_list if stock_code not in self.holding_stock_list]
         debug(f"自选股票列表（预买入）: {self.selected_stock_list}")
         
