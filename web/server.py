@@ -1,0 +1,775 @@
+"""
+MoneyDog Web 服务入口
+基于 FastAPI 提供 Web API 与简易前端界面。
+"""
+
+import json
+import os
+import threading
+import time
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+import configparser
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
+
+from main import load_strategy
+from utils.logger import error, info
+from laboratory.analyze import analyze_account_changes
+from app import ConfigApp
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
+RUN_INDEX_PATH = os.path.join(RESULTS_DIR, "run_index.json")
+
+# 当前正在后台运行的回测任务信息（用于中止回测）
+CURRENT_BACKTEST: Dict[str, Any] = {
+    "run_id": None,
+    "strategy": None,
+}
+
+
+class StrategyInfo(BaseModel):
+    """
+    策略基本信息模型，用于前端展示策略模块与类名。
+    """
+
+    module: str
+    classes: List[str]
+
+
+class StrategyConfig(BaseModel):
+    """
+    策略配置模型，对应 config.ini 中 [STRATEGY] 段。
+    """
+
+    strategy_module: str
+    strategy_class: str
+
+
+class BacktestConfig(BaseModel):
+    """
+    回测配置模型，对应 config.ini 中 [BACKTEST] 段的主要字段。
+    """
+
+    backtest_start_time: str
+    backtest_end_time: str
+    initial_amount: float
+    commission_rate: float
+    min_commission: float
+    tax_rate: float
+    limit_vol_type: str
+    max_vol_rate: float
+    max_vol_amount: float
+    batch_stock_selection_threads: int
+
+
+class RunBacktestRequest(BaseModel):
+    """
+    运行回测请求模型，封装策略选择与回测参数。
+    """
+
+    strategy: StrategyConfig
+    backtest: BacktestConfig
+
+
+class RunRecord(BaseModel):
+    """
+    回测运行记录模型，记录单次回测的关键信息。
+    """
+
+    id: str
+    created_at: str
+    strategy: StrategyConfig
+    backtest: BacktestConfig
+    files: Dict[str, str]
+    metrics: Optional[Dict[str, Any]] = None
+    summary: Optional[Dict[str, Any]] = None
+
+
+def _ensure_results_dir() -> None:
+    """
+    确保 results 目录存在。
+    """
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+
+def _snapshot_results_files() -> Dict[str, float]:
+    """
+    获取当前 results 目录下文件的快照（文件名 -> 修改时间）。
+
+    Returns:
+        dict: {文件名: 修改时间戳}
+    """
+    _ensure_results_dir()
+    snapshot: Dict[str, float] = {}
+    for name in os.listdir(RESULTS_DIR):
+        path = os.path.join(RESULTS_DIR, name)
+        if os.path.isfile(path):
+            snapshot[name] = os.path.getmtime(path)
+    return snapshot
+
+
+def _diff_results_files(
+    before: Dict[str, float],
+    after: Dict[str, float],
+) -> List[str]:
+    """
+    对比回测前后 results 目录，找出新增或更新的文件名列表。
+
+    Args:
+        before: 回测前的文件快照
+        after: 回测后的文件快照
+
+    Returns:
+        list[str]: 新增或被更新的文件名列表
+    """
+    changed: List[str] = []
+    for name, mtime in after.items():
+        if name not in before or mtime > before.get(name, 0):
+            changed.append(name)
+    return sorted(changed)
+
+
+def _load_run_index() -> List[RunRecord]:
+    """
+    加载 run_index.json 中的所有回测记录。
+
+    Returns:
+        list[RunRecord]: 回测记录列表
+    """
+    _ensure_results_dir()
+    if not os.path.exists(RUN_INDEX_PATH):
+        return []
+    try:
+        with open(RUN_INDEX_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return [RunRecord(**item) for item in raw]
+    except Exception as exc:  # noqa: BLE001
+        error(f"加载回测索引失败: {exc}")
+        return []
+
+
+def _save_run_index(records: List[RunRecord]) -> None:
+    """
+    将回测记录列表写入 run_index.json。
+
+    Args:
+        records: 回测记录列表
+    """
+    _ensure_results_dir()
+    try:
+        payload = [record.model_dump() for record in records]
+        with open(RUN_INDEX_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        error(f"保存回测索引失败: {exc}")
+
+
+def _build_default_backtest_config(cfg: configparser.ConfigParser) -> BacktestConfig:
+    """
+    从 configparser 对象中构造 BacktestConfig。
+
+    Args:
+        cfg: 已加载的配置对象
+
+    Returns:
+        BacktestConfig: 回测配置模型
+    """
+    section = "BACKTEST"
+    return BacktestConfig(
+        backtest_start_time=cfg.get(section, "backtest_start_time", fallback="20250101"),
+        backtest_end_time=cfg.get(section, "backtest_end_time", fallback="20250131"),
+        initial_amount=cfg.getfloat(section, "initial_amount", fallback=1_000_000),
+        commission_rate=cfg.getfloat(section, "commission_rate", fallback=0.0001),
+        min_commission=cfg.getfloat(section, "min_commission", fallback=5.0),
+        tax_rate=cfg.getfloat(section, "tax_rate", fallback=0.0005),
+        limit_vol_type=cfg.get(section, "limit_vol_type", fallback="amount"),
+        max_vol_rate=cfg.getfloat(section, "max_vol_rate", fallback=0.05),
+        max_vol_amount=cfg.getfloat(section, "max_vol_amount", fallback=100_000),
+        batch_stock_selection_threads=cfg.getint(
+            section,
+            "batch_stock_selection_threads",
+            fallback=0,
+        ),
+    )
+
+
+def _extract_metrics_from_df(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    将 analyze_account_changes 返回的单行 DataFrame 转换为 dict。
+
+    Args:
+        df: 账户分析结果 DataFrame
+
+    Returns:
+        dict: 账户指标字典
+    """
+    if df is None or df.empty:
+        return {}
+    row = df.iloc[0].to_dict()
+    # 确保 JSON 可序列化（将 numpy 类型转为 Python 原生类型）
+    result: Dict[str, Any] = {}
+    for key, value in row.items():
+        if isinstance(value, (pd.Timestamp, datetime)):
+            result[key] = value.isoformat()
+        elif hasattr(value, "item"):
+            result[key] = value.item()
+        else:
+            result[key] = value
+    return result
+
+
+def _build_account_summary(metrics: Dict[str, Any]) -> List[str]:
+    """
+    构造账户分析结果摘要文本列表，格式与日志输出保持一致。
+
+    Args:
+        metrics: 账户指标字典
+
+    Returns:
+        list[str]: 每行为一个摘要条目
+    """
+    if not metrics:
+        return []
+    lines: List[str] = []
+    init_assets = metrics.get("init_assets")
+    final_assets = metrics.get("final_assets")
+    profit_rate = metrics.get("profit_rate")
+    max_drawdown = metrics.get("max_drawdown")
+    sharpe_ratio = metrics.get("sharpe_ratio")
+    max_profit_rate = metrics.get("max_profit_rate")
+    max_loss_rate = metrics.get("max_loss_rate")
+    max_stock_count = metrics.get("max_stock_count")
+    max_position_rate = metrics.get("max_position_rate")
+    empty_days = metrics.get("empty_days")
+
+    lines.append("账户分析结果")
+    if init_assets is not None:
+        lines.append(f"初始资金: {init_assets:,.2f} 元")
+    if final_assets is not None:
+        lines.append(f"最终资金: {final_assets:,.2f} 元")
+    if profit_rate is not None:
+        lines.append(f"盈利率: {profit_rate * 100:.2f}%")
+    if max_drawdown is not None:
+        lines.append(f"最大回撤: {max_drawdown * 100:.2f}%")
+    if sharpe_ratio is not None:
+        if pd.notnull(sharpe_ratio):
+            lines.append(f"夏普比率(年化): {sharpe_ratio:.4f}")
+        else:
+            lines.append("夏普比率(年化): 无法计算")
+    if max_profit_rate is not None:
+        lines.append(f"最大涨幅: {max_profit_rate * 100:.2f}%")
+    if max_loss_rate is not None:
+        lines.append(f"最大跌幅: {max_loss_rate * 100:.2f}%")
+    if max_stock_count is not None:
+        lines.append(f"最大持仓股票数: {max_stock_count}")
+    if max_position_rate is not None:
+        if pd.notnull(max_position_rate):
+            lines.append(f"最大仓位资金占用率: {max_position_rate * 100:.2f}%")
+        else:
+            lines.append("最大仓位资金占用率: 无法计算")
+    if empty_days is not None:
+        lines.append(f"空仓天数: {empty_days}")
+    return lines
+
+
+def _build_stock_summary_from_file(path: str) -> List[str]:
+    """
+    基于 analyze_transactions_*.xlsx 构造个股分析结果摘要文本列表。
+
+    Args:
+        path: analyze_transactions Excel 文件路径
+
+    Returns:
+        list[str]: 每行为一个摘要条目
+    """
+    if not path or not os.path.exists(path):
+        return []
+    try:
+        df = pd.read_excel(path)
+    except Exception as exc:  # noqa: BLE001
+        error(f"加载个股分析文件失败: {exc}")
+        return []
+    if df is None or df.empty or "涨跌幅" not in df.columns:
+        return []
+
+    lines: List[str] = []
+    lines.append("个股分析结果")
+    total_trades = len(df)
+    lines.append(f"总交易次数: {total_trades}")
+
+    win_mask = df["涨跌幅"] > 0
+    loss_mask = df["涨跌幅"] < 0
+    win_count = df[win_mask].shape[0]
+    win_rate = (win_count / total_trades * 100.0) if total_trades > 0 else 0.0
+    lines.append(f"胜率: {win_rate:.2f}%")
+
+    avg_change = df["涨跌幅"].mean() * 100.0
+    max_change = df["涨跌幅"].max() * 100.0
+    min_change = df["涨跌幅"].min() * 100.0
+    lines.append(f"平均涨跌幅: {avg_change:.2f}%")
+    lines.append(f"最大涨跌幅: {max_change:.2f}%")
+    lines.append(f"最小涨跌幅: {min_change:.2f}%")
+
+    avg_profit_rate = df[win_mask]["涨跌幅"].mean() * 100.0 if win_mask.any() else 0.0
+    avg_loss_rate = df[loss_mask]["涨跌幅"].mean() * 100.0 if loss_mask.any() else 0.0
+    profit_loss_ratio = (avg_profit_rate / avg_loss_rate) if avg_loss_rate != 0 else 0.0
+    total_sum = df["涨跌幅"].sum() * 100.0
+    lines.append(f"盈亏和: {total_sum:.2f}%")
+    if avg_loss_rate != 0:
+        lines.append(
+            f"盈亏比：平均涨幅{avg_profit_rate:.2f}%，平均跌幅{avg_loss_rate:.2f}%，盈亏比{-profit_loss_ratio:.2f}",
+        )
+
+    if "持仓天数" in df.columns:
+        avg_hold_days = df["持仓天数"].mean()
+        lines.append(f"平均持仓天数: {avg_hold_days:.2f}")
+
+    if "总手续费" in df.columns:
+        total_commission = df["总手续费"].sum()
+        lines.append(f"总交易手续费: {total_commission:,.2f} 元")
+    if "总印花税" in df.columns:
+        total_tax = df["总印花税"].sum()
+        lines.append(f"总交易印花税: {total_tax:,.2f} 元")
+    if "总成本" in df.columns:
+        total_costs = df["总成本"].sum()
+        lines.append(f"总交易成本: {total_costs:,.2f} 元")
+
+    return lines
+
+
+def _build_run_summaries(files: Dict[str, str], metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    构造单次回测的账户与个股分析摘要。
+
+    Args:
+        files: 本次回测生成的结果文件映射
+        metrics: 账户指标字典
+
+    Returns:
+        dict: {"account": [...], "stock": [...]}
+    """
+    account_lines = _build_account_summary(metrics)
+    analyze_file = files.get("analyze_transactions")
+    stock_lines: List[str] = []
+    if analyze_file:
+        stock_lines = _build_stock_summary_from_file(os.path.join(RESULTS_DIR, analyze_file))
+    return {
+        "account": account_lines,
+        "stock": stock_lines,
+    }
+
+
+app = FastAPI(title="MoneyDog Web", version="0.1.0")
+
+# 允许本机访问，可按需扩展
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+static_dir = os.path.join(BASE_DIR, "static")
+if os.path.isdir(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request) -> HTMLResponse:
+    """
+    渲染首页，提供单页前端应用入口。
+
+    Args:
+        request: FastAPI Request 对象
+
+    Returns:
+        HTMLResponse: 首页 HTML 内容
+    """
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/api/strategies", response_model=List[StrategyInfo])
+async def list_strategies() -> List[StrategyInfo]:
+    """
+    获取当前项目中可用的策略列表。
+
+    Returns:
+        list[StrategyInfo]: 策略模块及其下策略类列表
+    """
+    app_cfg = ConfigApp()
+    raw_list = app_cfg._discover_strategies()  # noqa: SLF001
+    return [StrategyInfo(**item) for item in raw_list]
+
+
+@app.get("/api/config")
+async def get_current_config() -> JSONResponse:
+    """
+    获取当前生效的策略配置与回测配置。
+
+    Returns:
+        JSONResponse: 包含 strategy 与 backtest 两部分配置
+    """
+    cfg = configparser.ConfigParser()
+    cfg.read(os.path.join(PROJECT_ROOT, "config.ini"), encoding="utf-8")
+
+    strategy_cfg = StrategyConfig(
+        strategy_module=cfg.get("STRATEGY", "strategy_module", fallback=""),
+        strategy_class=cfg.get("STRATEGY", "strategy_class", fallback=""),
+    )
+    backtest_cfg = _build_default_backtest_config(cfg)
+
+    return JSONResponse(
+        {
+            "strategy": strategy_cfg.model_dump(),
+            "backtest": backtest_cfg.model_dump(),
+        },
+    )
+
+
+@app.post("/api/backtests/run")
+async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
+    """
+    根据前端提交的配置更新 config.ini，并在后台启动一次回测。
+
+    回测逻辑会在独立线程中执行，本接口立即返回回测 ID，用于后续在
+    历史回测列表与指标接口中查询结果。
+
+    Args:
+        payload: 前端提交的策略与回测配置
+
+    Returns:
+        JSONResponse: {\"run_id\": str, \"status\": \"running\"}
+    """
+    config_path = os.path.join(PROJECT_ROOT, "config.ini")
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path, encoding="utf-8")
+
+    # 更新策略配置
+    if not cfg.has_section("STRATEGY"):
+        cfg.add_section("STRATEGY")
+    cfg.set("STRATEGY", "strategy_module", payload.strategy.strategy_module)
+    cfg.set("STRATEGY", "strategy_class", payload.strategy.strategy_class)
+
+    # 更新回测配置
+    if not cfg.has_section("BACKTEST"):
+        cfg.add_section("BACKTEST")
+    bt = payload.backtest
+    cfg.set("BACKTEST", "backtest_start_time", bt.backtest_start_time)
+    cfg.set("BACKTEST", "backtest_end_time", bt.backtest_end_time)
+    cfg.set("BACKTEST", "initial_amount", str(bt.initial_amount))
+    cfg.set("BACKTEST", "commission_rate", str(bt.commission_rate))
+    cfg.set("BACKTEST", "min_commission", str(bt.min_commission))
+    cfg.set("BACKTEST", "tax_rate", str(bt.tax_rate))
+    cfg.set("BACKTEST", "limit_vol_type", bt.limit_vol_type)
+    cfg.set("BACKTEST", "max_vol_rate", str(bt.max_vol_rate))
+    cfg.set("BACKTEST", "max_vol_amount", str(bt.max_vol_amount))
+    cfg.set(
+        "BACKTEST",
+        "batch_stock_selection_threads",
+        str(bt.batch_stock_selection_threads),
+    )
+
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            cfg.write(f)
+    except Exception as exc:  # noqa: BLE001
+        error(f"写入配置文件失败: {exc}")
+        raise HTTPException(status_code=500, detail="保存配置失败") from exc
+
+    # 记录回测前的结果文件快照
+    before_snapshot = _snapshot_results_files()
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def _run_task() -> None:
+        """
+        后台线程实际执行回测任务：运行策略、分析结果并写入索引。
+        """
+        global CURRENT_BACKTEST  # noqa: PLW0603
+        info(
+            f"Web 后台回测开始，run_id={run_id}, "
+            f"strategy={payload.strategy.strategy_module}.{payload.strategy.strategy_class}, "
+            f"period={bt.backtest_start_time}-{bt.backtest_end_time}",
+        )
+        start_ts = time.time()
+        strategy = None
+        try:
+            strategy = load_strategy()
+            CURRENT_BACKTEST = {"run_id": run_id, "strategy": strategy}
+            strategy.run()
+        except Exception as exc:  # noqa: BLE001
+            error(f"Web 后台回测失败: {exc}")
+        finally:
+            elapsed = time.time() - start_ts
+            info(f"Web 后台回测结束，耗时 {elapsed:.2f} 秒，run_id={run_id}")
+            # 清理当前运行状态
+            CURRENT_BACKTEST = {"run_id": None, "strategy": None}
+
+        # 回测完成后，对比结果目录，找出本次新增/更新的文件
+        after_snapshot = _snapshot_results_files()
+        changed_files = _diff_results_files(before_snapshot, after_snapshot)
+
+        files_map: Dict[str, str] = {}
+        position_file: Optional[str] = None
+        for name in changed_files:
+            lower = name.lower()
+            if lower.startswith("account_curve_") and lower.endswith(".png"):
+                files_map["account_curve"] = name
+            elif lower.startswith("original_transactions_") and lower.endswith(".xlsx"):
+                files_map["original_transactions"] = name
+            elif lower.startswith("position_and_account_changes_") and lower.endswith(".xlsx"):
+                files_map["position_and_account_changes"] = name
+                position_file = name
+            elif lower.startswith("analyze_transactions_") and lower.endswith(".xlsx"):
+                files_map["analyze_transactions"] = name
+
+        # 从账户变动文件中提取账户指标（不再重复生成曲线）
+        metrics: Dict[str, Any] = {}
+        if position_file:
+            position_path = os.path.join(RESULTS_DIR, position_file)
+            try:
+                df_metrics = analyze_account_changes(
+                    position_and_account_changes=None,
+                    file_path=position_path,
+                    transactions_df=None,
+                    save_curve=False,
+                )
+                metrics = _extract_metrics_from_df(df_metrics)
+            except Exception as exc:  # noqa: BLE001
+                error(f"分析账户指标失败: {exc}")
+
+        # 将本次运行记录写入索引文件
+        records = _load_run_index()
+        summary = _build_run_summaries(files_map, metrics)
+        record = RunRecord(
+            id=run_id,
+            created_at=datetime.now().isoformat(timespec="seconds"),
+            strategy=payload.strategy,
+            backtest=payload.backtest,
+            files=files_map,
+            metrics=metrics or None,
+            summary=summary or None,
+        )
+        records.append(record)
+        _save_run_index(records)
+
+    # 启动后台线程执行回测任务，立即返回 run_id
+    thread = threading.Thread(target=_run_task, name=f"backtest-{run_id}", daemon=True)
+    thread.start()
+
+    return JSONResponse(
+        {
+            "run_id": run_id,
+            "status": "running",
+        },
+    )
+
+
+@app.get("/api/backtests", response_model=List[RunRecord])
+async def list_backtests() -> List[RunRecord]:
+    """
+    获取已记录的历史回测列表。
+
+    Returns:
+        list[RunRecord]: 回测记录列表
+    """
+    return _load_run_index()
+
+
+@app.get("/api/backtests/status")
+async def get_current_backtest_status() -> JSONResponse:
+    """
+    查询当前回测运行状态。
+
+    Returns:
+        JSONResponse: {\"running\": bool, \"run_id\": Optional[str]}
+    """
+    current = CURRENT_BACKTEST
+    run_id = current.get("run_id")
+    running = bool(run_id)
+    return JSONResponse({"running": running, "run_id": run_id})
+
+
+@app.post("/api/backtests/stop")
+async def stop_current_backtest() -> JSONResponse:
+    """
+    中止当前正在运行的回测任务。
+
+    注意：采用优雅中止方式，仅设置标记；回测会在当前交易日循环结束后退出。
+    """
+    current = CURRENT_BACKTEST
+    run_id = current.get("run_id")
+    strategy = current.get("strategy")
+    if not run_id or strategy is None:
+        raise HTTPException(status_code=400, detail="当前没有正在运行的回测任务")
+
+    # BaseStrategy 提供 request_stop 方法用于优雅中止
+    if hasattr(strategy, "request_stop"):
+        try:
+            strategy.request_stop()
+            info(f"已请求中止回测任务，run_id={run_id}")
+            return JSONResponse({"success": True, "run_id": run_id})
+        except Exception as exc:  # noqa: BLE001
+            error(f"中止回测任务失败: {exc}")
+            raise HTTPException(status_code=500, detail="中止回测失败") from exc
+    raise HTTPException(status_code=500, detail="当前策略不支持中止回测")
+
+
+@app.delete("/api/backtests/{run_id}")
+async def delete_backtest(run_id: str) -> JSONResponse:
+    """
+    删除指定回测 ID 的历史记录（仅从索引中移除，不删除实际结果文件）。
+
+    Args:
+        run_id: 回测 ID
+
+    Returns:
+        JSONResponse: 删除是否成功的结果
+    """
+    records = _load_run_index()
+    remaining = [r for r in records if r.id != run_id]
+    if len(remaining) == len(records):
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+    _save_run_index(remaining)
+    info(f"已从索引中删除回测记录: run_id={run_id}")
+    return JSONResponse({"success": True, "run_id": run_id})
+
+
+@app.get("/api/backtests/{run_id}/metrics")
+async def get_backtest_metrics(run_id: str) -> JSONResponse:
+    """
+    获取指定回测 ID 的账户指标；如索引中尚无指标，则尝试从结果文件即时计算。
+
+    Args:
+        run_id: 回测 ID
+
+    Returns:
+        JSONResponse: 账户指标字典
+    """
+    records = _load_run_index()
+    target = next((r for r in records if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+
+    # 若索引中已有指标，直接返回
+    if target.metrics:
+        return JSONResponse(target.metrics)
+
+    # 尝试从结果文件中即时计算
+    position_file = target.files.get("position_and_account_changes")
+    if not position_file:
+        raise HTTPException(status_code=404, detail="未找到账户变动文件")
+
+    position_path = os.path.join(RESULTS_DIR, position_file)
+    try:
+        df_metrics = analyze_account_changes(
+            position_and_account_changes=None,
+            file_path=position_path,
+            transactions_df=None,
+            save_curve=False,
+        )
+        metrics = _extract_metrics_from_df(df_metrics)
+    except Exception as exc:  # noqa: BLE001
+        error(f"即时分析账户指标失败: {exc}")
+        raise HTTPException(status_code=500, detail="分析账户指标失败") from exc
+
+    # 更新索引中的指标，方便下次直接读取
+    target.metrics = metrics
+    _save_run_index(records)
+
+    return JSONResponse(metrics)
+
+
+@app.get("/api/backtests/{run_id}/curve")
+async def get_backtest_curve(run_id: str) -> FileResponse:
+    """
+    获取指定回测 ID 的账户曲线 PNG 文件。
+
+    Args:
+        run_id: 回测 ID
+
+    Returns:
+        FileResponse: PNG 图片响应
+    """
+    records = _load_run_index()
+    target = next((r for r in records if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+
+    curve_file = target.files.get("account_curve")
+    if not curve_file:
+        raise HTTPException(status_code=404, detail="未找到账户曲线文件")
+
+    curve_path = os.path.join(RESULTS_DIR, curve_file)
+    if not os.path.exists(curve_path):
+        raise HTTPException(status_code=404, detail="账户曲线文件不存在")
+
+    return FileResponse(curve_path, media_type="image/png")
+
+
+@app.get("/api/backtests/{run_id}/record")
+async def get_backtest_record(run_id: str) -> FileResponse:
+    """
+    获取指定回测 ID 对应的主要记录 Excel 文件。
+
+    优先返回交易分析文件 analyze_transactions_*.xlsx，
+    若不存在则退回到原始成交 original_transactions_*.xlsx，
+    再退回到账户变动 position_and_account_changes_*.xlsx。
+    """
+    records = _load_run_index()
+    target = next((r for r in records if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+
+    file_name = (
+        target.files.get("analyze_transactions")
+        or target.files.get("original_transactions")
+        or target.files.get("position_and_account_changes")
+    )
+    if not file_name:
+        raise HTTPException(status_code=404, detail="未找到任何记录文件")
+
+    record_path = os.path.join(RESULTS_DIR, file_name)
+    if not os.path.exists(record_path):
+        raise HTTPException(status_code=404, detail="记录文件不存在")
+
+    return FileResponse(
+        record_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=file_name,
+    )
+
+
+def get_app() -> FastAPI:
+    """
+    供 Uvicorn 等服务器调用的应用工厂函数。
+
+    Returns:
+        FastAPI: MoneyDog Web 应用实例
+    """
+    return app
+
+
+if __name__ == "__main__":
+    # 允许直接通过 python -m web.server 启动开发服务器
+    import uvicorn
+
+    uvicorn.run(
+        "web.server:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+    )
+

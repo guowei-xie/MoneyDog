@@ -159,7 +159,8 @@ def plot_account_profit_curve(
             has_tx = False
             tx_mapped = None
     nrows = 3 if has_tx else 2
-    fig, axes = plt.subplots(nrows, 1, figsize=(10, 4 * nrows), sharex=True)
+    # 使用更宽的画布比例，尽量填满 Web 前端横向区域
+    fig, axes = plt.subplots(nrows, 1, figsize=(18, 3.6 * nrows), sharex=True)
     if nrows == 2:
         ax1, ax2 = axes
     else:
@@ -259,15 +260,19 @@ def analyze_account_changes(
     position_and_account_changes: list = None,
     file_path: str = "",
     transactions_df: pd.DataFrame = None,
+    save_curve: bool = True,
 ) -> pd.DataFrame:
     """
-    分析账户变动记录，输出统计结果；若传入交易记录分析结果则一并绘制按买入日个股盈利率图。
+    分析账户变动记录，输出统计结果；可选择是否绘制并保存账户盈利率曲线。
+
     Args:
-        position_and_account_changes: [{'trade_date', 'stock_count', 'stock_value', 'total_assets'}, ...]
-        file_path: 明细excel路径, 可选
-        transactions_df: 可选，建仓/清仓分析结果（含 建仓时间、涨跌幅），传入则图中增加第三子图
+        position_and_account_changes: 账户变动记录列表 [{'trade_date', 'stock_count', 'stock_value', 'total_assets'}, ...]
+        file_path: 明细 Excel 路径，可选；提供则优先从文件加载数据
+        transactions_df: 可选，建仓/清仓分析结果（含建仓时间、涨跌幅），传入则图中增加第三子图
+        save_curve: 是否绘制并保存账户盈利率曲线，默认 True
+
     Returns:
-        pd.DataFrame: 统计结果
+        pd.DataFrame: 单行统计结果 DataFrame
     """
     df = None
     if file_path:
@@ -325,9 +330,10 @@ def analyze_account_changes(
     info(f"空仓天数: {empty_days}")
 
     # 绘制账户曲线（含可选第三图：按买入日个股盈利率散点+中位数折线）
-    curve_path = plot_account_profit_curve(df, initial, transactions_df=transactions_df)
-    if curve_path:
-        info(f"账户盈利率曲线已保存: {curve_path}")
+    if save_curve:
+        curve_path = plot_account_profit_curve(df, initial, transactions_df=transactions_df)
+        if curve_path:
+            info(f"账户盈利率曲线已保存: {curve_path}")
 
     return pd.DataFrame([{
         "init_assets": initial,

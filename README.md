@@ -4,6 +4,7 @@ MoneyDog(旺财) 是一个基于 **Python + 本地 DuckDB 数据库** 的量化�
 
 ### 🚀 功能特性
 
+- **Web 控制台**: 提供基于 FastAPI 的浏览器前端（`web/server.py`），支持策略选择、参数配置、一键启动/中止回测与历史回测管理
 - **交互式配置界面**: 提供终端应用入口 (`app.py`)，支持可视化配置参数，无需手动编辑配置文件
 - **策略基类架构**: 提供 `BaseStrategy` 基类，简化策略开发流程
 - **策略可配置**: 通过配置文件切换策略，无需修改代码
@@ -28,6 +29,10 @@ MoneyDog/
 ├── requirements.txt       # 依赖包列表
 ├── data/
 │   └── stock.duckdb       # 行情数据 DuckDB 库（需预先准备）
+├── web/                  # Web 前端与 API 服务
+│   ├── server.py         # FastAPI 应用入口（浏览器控制台）
+│   ├── templates/        # Web 界面模板（单页控制台）
+│   └── __init__.py
 ├── strategys/             # 策略模块
 │   ├── BaseStrategy.py    # 策略基类，提供通用框架
 │   └── *.py               # 具体策略实现
@@ -216,13 +221,47 @@ python app.py
 
    日志会输出到控制台及 `logs/MoneyDog_YYYY-MM-DD.log`。
 
+### 方式三：使用 Web 控制台（浏览器前端）
+
+在项目根目录启动 FastAPI 服务：
+
+```bash
+python -m web.server
+# 或使用 uvicorn（自定义 host/port）
+uvicorn web.server:app --host 127.0.0.1 --port 8000 --reload
+```
+
+然后在浏览器中访问：
+
+- `http://127.0.0.1:8000`
+
+Web 控制台提供：
+
+- 左侧：策略模块/类选择、回测时间区间、初始资金/费用、仓位与多线程参数配置，一键开始/中止回测
+- 右侧上半部分：当前回测的账户指标卡片 + 账户收益与仓位曲线图
+- 右侧下半部分：历史回测列表（点击某行可查看结果，支持删除记录、打开对应分析 Excel）
+
 ### 查看结果
 
-回测完成后，`results/` 目录下会生成若干 Excel 文件，例如：
+#### 方式一：在 Web 控制台中查看
+
+- “本次回测结果”中会展示：
+  - 账户层指标（收益率、最大回撤、夏普、最大持仓数、最大仓位、空仓天数等）
+  - 账户收益与仓位曲线图
+  - 账户分析结果摘要、个股分析结果摘要（与日志中输出内容一致）
+- “历史回测”中：
+  - 点击某一行可回看对应回测的曲线与指标
+  - “记录”按钮可直接下载该次回测的主要分析 Excel
+  - “删除”按钮只删除历史记录索引，不删除实际结果文件
+
+#### 方式二：直接查看结果文件
+
+回测完成后，`results/` 目录下会生成若干 Excel/PNG 文件，例如：
 
 - `original_transactions_YYYYMMDD_HHMMSS.xlsx`：原始逐笔交易与持仓变动
 - `position_and_account_changes_YYYYMMDD_HHMMSS.xlsx`：每日账户与持仓统计
 - `analyze_transactions_YYYYMMDD_HHMMSS.xlsx`：交易统计分析结果（由 `laboratory/analyze.py` 生成）
+- `account_curve_YYYYMMDD_HHMMSS.png`：账户收益与仓位曲线图
 
 ---
 

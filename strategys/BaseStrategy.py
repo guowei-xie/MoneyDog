@@ -30,6 +30,8 @@ class BaseStrategy(ABC):
         初始化策略
         """
         self.start_time = time.time()
+        # 回测中止标记，用于外部请求优雅停止回测
+        self._stop_requested: bool = False
 
         # 每次实例化策略时重新读取配置，避免长生命周期进程中使用旧配置
         cfg = configparser.ConfigParser()
@@ -93,6 +95,25 @@ class BaseStrategy(ABC):
         if self._is_verbose_mode():
             info(message)
 
+    def request_stop(self) -> None:
+        """
+        请求中止当前回测。
+
+        外部调用该方法（例如 Web 服务）时，不会立刻强制退出，
+        而是在当前交易日循环安全点检测到标记后优雅结束回测。
+        """
+        self._stop_requested = True
+        self._info_verbose("收到中止回测请求，将在当前交易日结束后停止。")
+
+    def _is_stop_requested(self) -> bool:
+        """
+        检查是否已收到中止回测请求。
+
+        Returns:
+            bool: True 表示需要尽快结束回测。
+        """
+        return bool(getattr(self, "_stop_requested", False))
+
     def run(self) -> bool:
         """
         策略运行主流程
@@ -103,6 +124,10 @@ class BaseStrategy(ABC):
         # 遍历交易日历，逐日运行（最后一天不运行）
         trade_days = self.trade_calendar[:-1]
         for trade_date in tqdm(trade_days, desc="回测进度", unit="日", disable=self._tqdm_disable()):
+            # 支持外部中止请求：在每日循环入口检查标记
+            if self._is_stop_requested():
+                info(f"检测到中止回测请求，提前结束回测，最后交易日: {trade_date}")
+                break
             proceed = self.before_open(trade_date)
             if proceed:
                 for minute_snapshot in self.minute_snapshots:
