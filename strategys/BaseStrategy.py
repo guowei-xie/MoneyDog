@@ -36,6 +36,11 @@ class BaseStrategy(ABC):
         cfg.read('config.ini', encoding='utf-8')
         self.backtest_start_time = cfg.get('BACKTEST', 'backtest_start_time')
         self.backtest_end_time = cfg.get('BACKTEST', 'backtest_end_time')
+        # 冗余日志开关：True=冗余模式，False=简约模式
+        try:
+            self.verbose = cfg.getboolean('BACKTEST', 'verbose', fallback=False)
+        except (TypeError, ValueError):
+            self.verbose = False
         self.broker = Broker()
         # 预选股线程数（0=自动）
         try:
@@ -57,6 +62,37 @@ class BaseStrategy(ABC):
         # 日线全量缓存，选股前一次性加载，多线程选股时只读此内存，不访问 DuckDB
         self._daily_bars_cache: Optional[Dict] = None
 
+    def _is_verbose_mode(self) -> bool:
+        """
+        判断当前是否为冗余(verbose)模式。
+
+        Returns:
+            bool: True=冗余(verbose)，False=简约(simple)。
+        """
+        return bool(getattr(self, "verbose", False))
+
+    def _tqdm_disable(self) -> bool:
+        """
+        根据运行模式决定是否禁用 tqdm 进度条。
+
+        - verbose = False: 显示进度条（简约模式）
+        - verbose = True : 不显示进度条（冗余模式，避免与大量日志混杂）
+
+        Returns:
+            bool: True=禁用进度条，False=显示进度条
+        """
+        return self._is_verbose_mode()
+
+    def _info_verbose(self, message: str) -> None:
+        """
+        仅在冗余(verbose)模式输出 info 日志。
+
+        Args:
+            message: 日志内容
+        """
+        if self._is_verbose_mode():
+            info(message)
+
     def run(self) -> bool:
         """
         策略运行主流程
@@ -66,7 +102,7 @@ class BaseStrategy(ABC):
         self.prepare()
         # 遍历交易日历，逐日运行（最后一天不运行）
         trade_days = self.trade_calendar[:-1]
-        for trade_date in tqdm(trade_days, desc="回测进度", unit="日"):
+        for trade_date in tqdm(trade_days, desc="回测进度", unit="日", disable=self._tqdm_disable()):
             proceed = self.before_open(trade_date)
             if proceed:
                 for minute_snapshot in self.minute_snapshots:
@@ -174,10 +210,13 @@ class BaseStrategy(ABC):
         Returns:
             bool: 是否继续运行当日策略
         """
-        debug(f"策略开盘前运行: 【{add_num_date_days(trade_date, 1, self.trade_calendar)}】")
+        self._info_verbose(f"策略开盘前运行: 【{add_num_date_days(trade_date, 1, self.trade_calendar)}】")
         
         # 资产概览
-        debug(f"可用资金: {self.broker.available_amount:,.2f} 元，持仓价值: {self.broker.get_position_value():,.2f} 元，总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%")
+        self._info_verbose(
+            f"可用资金: {self.broker.available_amount:,.2f} 元，持仓价值: {self.broker.get_position_value():,.2f} 元，"
+            f"总资产: {self.broker.get_total_assets():,.2f} 元, 总盈利率: {self.broker.get_total_profit_rate():,.2f}%"
+        )
         
         # 盘前清理：清除volume为0的持仓股票信息、解锁昨日所有被锁定的持仓
         self.broker.clean_position()
@@ -192,10 +231,10 @@ class BaseStrategy(ABC):
         else:
             self.selected_stock_list = self.get_selected_stock_list(trade_date)
         self.selected_stock_list = [stock_code for stock_code in self.selected_stock_list if stock_code not in self.holding_stock_list]
-        debug(f"自选股票列表（预买入）: {self.selected_stock_list}")
+        self._info_verbose(f"自选股票列表（预买入）: {self.selected_stock_list}")
         
         if not self.selected_stock_list and not self.holding_stock_list:
-            debug(f"没有自选股票和持仓股票，跳过策略开盘前运行")
+            self._info_verbose("没有自选股票和持仓股票，跳过策略开盘前运行")
             self.minute_snapshots = []
             return False
         
@@ -219,8 +258,8 @@ class BaseStrategy(ABC):
         for stock_code, position in positions.items():
             if position.get('volume', 0) > 0:
                 result.append(stock_code)
-        debug(f"获取持仓股票列表（预卖出）完成: {len(result)} 只股票")
-        debug(f"持仓股票列表: {result}")
+        self._info_verbose(f"获取持仓股票列表（预卖出）完成: {len(result)} 只股票")
+        self._info_verbose(f"持仓股票列表: {result}")
         return result
 
     @abstractmethod
@@ -396,7 +435,7 @@ class BaseStrategy(ABC):
             minute_snapshot = self.minute_snapshots[-1]
             self.broker.update_position(minute_snapshot)
         else:
-            debug(f"没有分时快照数据，跳过盘后更新持仓信息")
+            self._info_verbose("没有分时快照数据，跳过盘后更新持仓信息")
         
         # 记录持仓和账户变化
         self.broker.record_position_and_account_change(trade_date)

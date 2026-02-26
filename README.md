@@ -142,6 +142,10 @@ strategy_class = NPatternBottom
 
 ```ini
 [BACKTEST]
+# 冗余日志开关:
+# - verbose = False: 简约模式（显示回测/选股进度条，不显示部分冗余信息日志）
+# - verbose = True : 冗余模式（显示部分冗余信息日志，不显示回测/选股进度条）
+verbose = False
 # 回测开始/结束时间（数字日期）
 backtest_start_time = 20250901
 backtest_end_time   = 20250930
