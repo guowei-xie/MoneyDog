@@ -9,16 +9,28 @@ from utils.util import time_str_to_datetime
 import matplotlib.pyplot as plt
 import os
 
-config = configparser.ConfigParser()
-config.read('config.ini', encoding='utf-8')
 
 class Broker:
     def __init__(self):
-        self.initial_amount = config.getfloat('BACKTEST', 'initial_amount')
+        """
+        初始化模拟撮合 Broker，每次实例化时按当前 config.ini 加载资金与费用配置。
+        """
+        cfg = configparser.ConfigParser()
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(project_root, "config.ini")
+        cfg.read(config_path, encoding="utf-8")
+
+        # 账户初始资金及交易费用参数
+        self.initial_amount = cfg.getfloat("BACKTEST", "initial_amount", fallback=100000.0)
         self.available_amount = self.initial_amount
-        self.commission_rate = config.getfloat('BACKTEST', 'commission_rate')
-        self.min_commission = config.getfloat('BACKTEST', 'min_commission')
-        self.tax_rate = config.getfloat('BACKTEST', 'tax_rate')
+        self.commission_rate = cfg.getfloat("BACKTEST", "commission_rate", fallback=0.0001)
+        self.min_commission = cfg.getfloat("BACKTEST", "min_commission", fallback=5.0)
+        self.tax_rate = cfg.getfloat("BACKTEST", "tax_rate", fallback=0.0005)
+
+        # 仓位管理参数（单股最大买入控制）
+        self.limit_vol_type = cfg.get("BACKTEST", "limit_vol_type", fallback="amount")
+        self.max_vol_rate = cfg.getfloat("BACKTEST", "max_vol_rate", fallback=0.05)
+        self.max_vol_amount = cfg.getfloat("BACKTEST", "max_vol_amount", fallback=100000.0)
         self.positions = {} # 持仓 {'stock_code': {'cost_price': cost_price, 'volume': volume, 'disabled_volume': disabled_volume}}
         self.transactions = [] # 交易记录 [{'stock_code': stock_code, 'price': price, 'volume': volume, 'action': action, 'cost_price': cost_price, 'time': time}]
         self.position_and_account_changes = [] # 持仓与账户信息变动记录 [{'trade_date': trade_date, 'stock_count': stock_count, 'stock_cost': stock_cost, 'stock_value': stock_value, 'available_amount': available_amount, 'total_assets': total_assets}]
@@ -133,10 +145,10 @@ class Broker:
         Returns:
             int: 单股买入数量（100的整数倍，且不超过可用资金所能买入的数量）
         """
-        # 获取仓位管理配置
-        limit_vol_type = config.get('BACKTEST', 'limit_vol_type')
-        max_vol_rate = config.getfloat('BACKTEST', 'max_vol_rate')
-        max_vol_amount = config.getfloat('BACKTEST', 'max_vol_amount')
+        # 获取仓位管理配置（来自当前实例的配置快照）
+        limit_vol_type = self.limit_vol_type
+        max_vol_rate = self.max_vol_rate
+        max_vol_amount = self.max_vol_amount
 
         # 可能的最大买入资金（不能超过可用资金）
         max_affordable_volume = int(self.available_amount / price // 100 * 100)

@@ -27,7 +27,7 @@ class BaseStrategy(ABC):
     
     def __init__(self):
         """
-        初始化策略
+        初始化策略：按当前 config.ini 读取回测配置，并构造撮合 Broker。
         """
         self.start_time = time.time()
         # 回测中止标记，用于外部请求优雅停止回测
@@ -35,18 +35,23 @@ class BaseStrategy(ABC):
 
         # 每次实例化策略时重新读取配置，避免长生命周期进程中使用旧配置
         cfg = configparser.ConfigParser()
-        cfg.read('config.ini', encoding='utf-8')
-        self.backtest_start_time = cfg.get('BACKTEST', 'backtest_start_time')
-        self.backtest_end_time = cfg.get('BACKTEST', 'backtest_end_time')
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(project_root, "config.ini")
+        cfg.read(config_path, encoding="utf-8")
+
+        self.backtest_start_time = cfg.get("BACKTEST", "backtest_start_time", fallback="")
+        self.backtest_end_time = cfg.get("BACKTEST", "backtest_end_time", fallback="")
         # 冗余日志开关：True=冗余模式，False=简约模式
         try:
-            self.verbose = cfg.getboolean('BACKTEST', 'verbose', fallback=False)
+            self.verbose = cfg.getboolean("BACKTEST", "verbose", fallback=False)
         except (TypeError, ValueError):
             self.verbose = False
         self.broker = Broker()
         # 预选股线程数（0=自动）
         try:
-            self._batch_stock_selection_threads = int(cfg.get('BACKTEST', 'batch_stock_selection_threads', fallback='0'))
+            self._batch_stock_selection_threads = int(
+                cfg.get("BACKTEST", "batch_stock_selection_threads", fallback="0"),
+            )
         except (TypeError, ValueError):
             self._batch_stock_selection_threads = 0
         
