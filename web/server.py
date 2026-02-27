@@ -18,12 +18,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
 
 from main import load_strategy
 from utils.logger import error, info
 from laboratory.analyze import analyze_account_changes
 from app import ConfigApp
+from web.schemas import (
+    BacktestConfig,
+    RunBacktestRequest,
+    RunRecord,
+    StrategyConfig,
+    StrategyInfo,
+)
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,64 +51,6 @@ BACKTEST_PROGRESS: Dict[str, Any] = {
     "total": 0,
     "percent": 0.0,
 }
-
-
-class StrategyInfo(BaseModel):
-    """
-    策略基本信息模型，用于前端展示策略模块与类名。
-    """
-
-    module: str
-    classes: List[str]
-
-
-class StrategyConfig(BaseModel):
-    """
-    策略配置模型，对应 config.ini 中 [STRATEGY] 段。
-    """
-
-    strategy_module: str
-    strategy_class: str
-
-
-class BacktestConfig(BaseModel):
-    """
-    回测配置模型，对应 config.ini 中 [BACKTEST] 段的主要字段。
-    """
-
-    backtest_start_time: str
-    backtest_end_time: str
-    initial_amount: float
-    commission_rate: float
-    min_commission: float
-    tax_rate: float
-    limit_vol_type: str
-    max_vol_rate: float
-    max_vol_amount: float
-    batch_stock_selection_threads: int
-
-
-class RunBacktestRequest(BaseModel):
-    """
-    运行回测请求模型，封装策略选择与回测参数。
-    """
-
-    strategy: StrategyConfig
-    backtest: BacktestConfig
-
-
-class RunRecord(BaseModel):
-    """
-    回测运行记录模型，记录单次回测的关键信息。
-    """
-
-    id: str
-    created_at: str
-    strategy: StrategyConfig
-    backtest: BacktestConfig
-    files: Dict[str, str]
-    metrics: Optional[Dict[str, Any]] = None
-    summary: Optional[Dict[str, Any]] = None
 
 
 def _ensure_results_dir() -> None:
