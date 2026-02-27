@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+import shutil
 
 import configparser
 import pandas as pd
@@ -498,6 +499,7 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
         后台线程实际执行回测任务：运行策略、分析结果并写入索引。
         """
         global CURRENT_BACKTEST  # noqa: PLW0603
+        strategy_code_filename: Optional[str] = None
         info(
             f"Web 后台回测开始，run_id={run_id}, "
             f"strategy={payload.strategy.strategy_module}.{payload.strategy.strategy_class}, "
@@ -507,6 +509,25 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
         strategy = None
         try:
             strategy = load_strategy()
+            # 回测开始前为本次运行保存一份策略源码快照到 results 目录
+            try:
+                strategy_module_name = payload.strategy.strategy_module
+                src_path = os.path.join(PROJECT_ROOT, "strategys", f"{strategy_module_name}.py")
+                if os.path.exists(src_path):
+                    strategy_code_filename = f"strategy_{strategy_module_name}_{run_id}.py"
+                    dst_path = os.path.join(RESULTS_DIR, strategy_code_filename)
+                    shutil.copy2(src_path, dst_path)
+                    info(
+                        f"已为回测 {run_id} 保存策略源码快照: "
+                        f"{strategy_module_name}.py -> {strategy_code_filename}",
+                    )
+                else:
+                    info(
+                        "未找到策略源码文件，跳过保存策略代码快照: "
+                        f"{src_path}",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                error(f"保存策略源码快照失败: {exc}")
             CURRENT_BACKTEST = {"run_id": run_id, "strategy": strategy}
             strategy.run()
         except Exception as exc:  # noqa: BLE001
@@ -534,6 +555,10 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
                 position_file = name
             elif lower.startswith("analyze_transactions_") and lower.endswith(".xlsx"):
                 files_map["analyze_transactions"] = name
+
+        # 为本次回测记录策略源码文件名（如存在）
+        if strategy_code_filename:
+            files_map["strategy_code"] = strategy_code_filename
 
         # 从账户变动文件中提取账户指标（不再重复生成曲线）
         metrics: Dict[str, Any] = {}
@@ -749,6 +774,47 @@ async def get_backtest_record(run_id: str) -> FileResponse:
         record_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=file_name,
+    )
+
+
+@app.get("/api/backtests/{run_id}/code")
+async def get_backtest_code(run_id: str) -> JSONResponse:
+    """
+    获取指定回测 ID 对应的策略源码内容。
+
+    若索引中未记录策略源码文件，或文件已不存在，则返回 404。
+
+    Args:
+        run_id: 回测 ID
+
+    Returns:
+        JSONResponse: {\"file_name\": str, \"code\": str}
+    """
+    records = _load_run_index()
+    target = next((r for r in records if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+
+    code_file = target.files.get("strategy_code")
+    if not code_file:
+        raise HTTPException(status_code=404, detail="未找到策略源码文件记录")
+
+    code_path = os.path.join(RESULTS_DIR, code_file)
+    if not os.path.exists(code_path):
+        raise HTTPException(status_code=404, detail="策略源码文件不存在")
+
+    try:
+        with open(code_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as exc:  # noqa: BLE001
+        error(f"读取策略源码文件失败: {exc}")
+        raise HTTPException(status_code=500, detail="读取策略源码失败") from exc
+
+    return JSONResponse(
+        {
+            "file_name": code_file,
+            "code": content,
+        },
     )
 
 

@@ -246,6 +246,24 @@
     </main>
 </div>
 
+<!-- 策略代码查看弹窗 -->
+<div id="code-modal"
+     class="fixed inset-0 z-30 hidden items-center justify-center bg-slate-950/70">
+    <div class="w-full max-w-3xl max-h-[80vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-xl flex flex-col">
+        <div class="px-4 py-2 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+            <div id="code-modal-title" class="font-semibold text-slate-100 text-sm"></div>
+            <button id="code-modal-close"
+                    class="text-slate-400 hover:text-slate-100 text-xs px-2 py-1 rounded-lg border border-transparent hover:border-slate-600">
+                关闭
+            </button>
+        </div>
+        <div class="p-3 overflow-auto text-[11px]">
+            <pre id="code-modal-content"
+                 class="whitespace-pre text-slate-100 font-mono"></pre>
+        </div>
+    </div>
+</div>
+
 <script>
     // 简单工具函数：设置状态栏信息
     function setStatus(message, type = "info") {
@@ -436,6 +454,20 @@
             const actionTd = document.createElement("td");
             actionTd.className = "text-right px-2 py-1.5 space-x-1";
 
+            const codeBtn = document.createElement("button");
+            codeBtn.className = "inline-flex items-center rounded-lg border border-slate-700 px-2 py-0.5 text-xs text-slate-200 hover:border-emerald-500 hover:text-emerald-400";
+            codeBtn.textContent = "代码";
+            codeBtn.onclick = async (e) => {
+                e.stopPropagation();
+                try {
+                    const data = await fetchJson(`/api/backtests/${encodeURIComponent(run.id)}/code`);
+                    openCodeModal(run, data);
+                } catch (err) {
+                    console.error(err);
+                    setStatus("加载策略代码失败，请检查服务器日志或结果目录。", "error");
+                }
+            };
+
             const recordBtn = document.createElement("button");
             recordBtn.className = "inline-flex items-center rounded-lg border border-slate-700 px-2 py-0.5 text-xs text-slate-200 hover:border-emerald-500 hover:text-emerald-400";
             recordBtn.textContent = "记录";
@@ -472,12 +504,42 @@
                 }
             };
 
+            actionTd.appendChild(codeBtn);
             actionTd.appendChild(recordBtn);
             actionTd.appendChild(delBtn);
             tr.appendChild(actionTd);
 
             tbody.appendChild(tr);
         }
+    }
+
+    function openCodeModal(run, data) {
+        const modal = document.getElementById("code-modal");
+        const titleEl = document.getElementById("code-modal-title");
+        const contentEl = document.getElementById("code-modal-content");
+        if (!modal || !titleEl || !contentEl) return;
+
+        const moduleName = run.strategy?.strategy_module || "";
+        const className = run.strategy?.strategy_class || "";
+        const fileName = data?.file_name || "";
+        const code = data?.code || "暂无策略代码内容。";
+
+        const strategyLabel = moduleName && className
+            ? `${moduleName}.${className}`
+            : className || moduleName || "未识别策略";
+
+        titleEl.textContent = `策略代码：${strategyLabel}${fileName ? ` (${fileName})` : ""}`;
+        contentEl.textContent = code;
+
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+    }
+
+    function closeCodeModal() {
+        const modal = document.getElementById("code-modal");
+        if (!modal) return;
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
     }
 
     async function fetchJson(url, options) {
@@ -656,6 +718,21 @@
         document.getElementById("run-backtest-btn").addEventListener("click", handleRunBacktest);
         document.getElementById("stop-backtest-btn").addEventListener("click", handleStopBacktest);
         document.getElementById("refresh-runs-btn").addEventListener("click", loadRuns);
+        const codeModal = document.getElementById("code-modal");
+        const codeModalClose = document.getElementById("code-modal-close");
+        if (codeModal) {
+            codeModal.addEventListener("click", (e) => {
+                if (e.target === codeModal) {
+                    closeCodeModal();
+                }
+            });
+        }
+        if (codeModalClose) {
+            codeModalClose.addEventListener("click", (e) => {
+                e.stopPropagation();
+                closeCodeModal();
+            });
+        }
         loadStrategiesAndConfig();
         loadRuns();
     });
