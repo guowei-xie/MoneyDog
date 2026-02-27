@@ -37,6 +37,15 @@ CURRENT_BACKTEST: Dict[str, Any] = {
     "strategy": None,
 }
 
+# 当前回测进度信息（供前端查询进度展示）
+BACKTEST_PROGRESS: Dict[str, Any] = {
+    "run_id": None,
+    "stage": "idle",  # idle/selection/backtest
+    "current": 0,
+    "total": 0,
+    "percent": 0.0,
+}
+
 
 class StrategyInfo(BaseModel):
     """
@@ -509,6 +518,31 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
         strategy = None
         try:
             strategy = load_strategy()
+            # 为当前策略注入进度回调，用于 Web 前端展示回测/选股进度
+            if hasattr(strategy, "set_progress_callback"):
+                try:
+                    def _progress_callback(stage: str, current: int, total: int) -> None:
+                        """
+                        回测进度回调：由策略在每日循环或选股过程中调用，更新全局进度状态。
+
+                        Args:
+                            stage: 当前阶段标识（如 'selection' 或 'backtest'）。
+                            current: 已完成的交易日数量。
+                            total: 总交易日数量。
+                        """
+                        if total <= 0:
+                            percent = 0.0
+                        else:
+                            percent = max(0.0, min(100.0, current / total * 100.0))
+                        BACKTEST_PROGRESS["run_id"] = run_id
+                        BACKTEST_PROGRESS["stage"] = stage or "backtest"
+                        BACKTEST_PROGRESS["current"] = int(current)
+                        BACKTEST_PROGRESS["total"] = int(total)
+                        BACKTEST_PROGRESS["percent"] = float(percent)
+
+                    strategy.set_progress_callback(_progress_callback)
+                except Exception as exc:  # noqa: BLE001
+                    error(f"注入回测进度回调失败: {exc}")
             # 回测开始前为本次运行保存一份策略源码快照到 results 目录
             try:
                 strategy_module_name = payload.strategy.strategy_module
@@ -529,6 +563,12 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
             except Exception as exc:  # noqa: BLE001
                 error(f"保存策略源码快照失败: {exc}")
             CURRENT_BACKTEST = {"run_id": run_id, "strategy": strategy}
+            # 重置并初始化进度信息
+            BACKTEST_PROGRESS["run_id"] = run_id
+            BACKTEST_PROGRESS["stage"] = "selection"
+            BACKTEST_PROGRESS["current"] = 0
+            BACKTEST_PROGRESS["total"] = 0
+            BACKTEST_PROGRESS["percent"] = 0.0
             strategy.run()
         except Exception as exc:  # noqa: BLE001
             error(f"Web 后台回测失败: {exc}")
@@ -537,6 +577,10 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
             info(f"Web 后台回测结束，耗时 {elapsed:.2f} 秒，run_id={run_id}")
             # 清理当前运行状态
             CURRENT_BACKTEST = {"run_id": None, "strategy": None}
+            # 回测结束后若进度尚未到 100%，则补齐为 100%
+            if BACKTEST_PROGRESS.get("run_id") == run_id:
+                BACKTEST_PROGRESS["stage"] = "backtest"
+                BACKTEST_PROGRESS["percent"] = 100.0
 
         # 回测完成后，对比结果目录，找出本次新增/更新的文件
         after_snapshot = _snapshot_results_files()
@@ -619,12 +663,41 @@ async def get_current_backtest_status() -> JSONResponse:
     查询当前回测运行状态。
 
     Returns:
-        JSONResponse: {\"running\": bool, \"run_id\": Optional[str]}
+        JSONResponse: {
+            "running": bool,
+            "run_id": Optional[str],
+            "stage": str,
+            "current": int,
+            "total": int,
+            "percent": float,
+        }
     """
     current = CURRENT_BACKTEST
     run_id = current.get("run_id")
     running = bool(run_id)
-    return JSONResponse({"running": running, "run_id": run_id})
+
+    # 仅当进度信息与当前运行的回测 ID 一致时，才返回实际进度；否则视为 0。
+    if run_id and BACKTEST_PROGRESS.get("run_id") == run_id:
+        stage = str(BACKTEST_PROGRESS.get("stage", "idle"))
+        progress_current = int(BACKTEST_PROGRESS.get("current", 0) or 0)
+        progress_total = int(BACKTEST_PROGRESS.get("total", 0) or 0)
+        progress_percent = float(BACKTEST_PROGRESS.get("percent", 0.0) or 0.0)
+    else:
+        stage = "idle"
+        progress_current = 0
+        progress_total = 0
+        progress_percent = 0.0
+
+    return JSONResponse(
+        {
+            "running": running,
+            "run_id": run_id,
+            "stage": stage,
+            "current": progress_current,
+            "total": progress_total,
+            "percent": progress_percent,
+        },
+    )
 
 
 @app.post("/api/backtests/stop")

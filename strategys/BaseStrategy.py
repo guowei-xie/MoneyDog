@@ -7,16 +7,21 @@ import time
 import configparser
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 from tqdm import tqdm
 
-from utils.data import get_stock_list_in_main_board, get_trade_calendar, get_daily_bars, get_daily_bars_from_cache
-from utils.logger import info, debug
-from utils.util import generate_minute_snapshot, get_elapsed_time_str, add_num_date_days
+from utils.data import (
+    get_daily_bars,
+    get_daily_bars_from_cache,
+    get_stock_list_in_main_board,
+    get_trade_calendar,
+)
+from utils.logger import debug, info
+from utils.util import add_num_date_days, generate_minute_snapshot, get_elapsed_time_str
 from utils.broker import Broker
-from laboratory.analyze import analyze_buy_and_sell_record, analyze_account_changes
+from laboratory.analyze import analyze_account_changes, analyze_buy_and_sell_record
 
 
 class BaseStrategy(ABC):
@@ -32,6 +37,8 @@ class BaseStrategy(ABC):
         self.start_time = time.time()
         # 回测中止标记，用于外部请求优雅停止回测
         self._stop_requested: bool = False
+        # 回测进度回调（由外部注入，例如 Web 服务），签名：callback(stage:str, current:int, total:int) -> None
+        self._progress_callback: Optional[Callable[[str, int, int], None]] = None
 
         # 每次实例化策略时重新读取配置，避免长生命周期进程中使用旧配置
         cfg = configparser.ConfigParser()
@@ -78,6 +85,20 @@ class BaseStrategy(ABC):
         """
         return bool(getattr(self, "verbose", False))
 
+    def set_progress_callback(self, callback: Optional[Callable[[str, int, int], None]]) -> None:
+        """
+        设置回测进度回调函数。
+
+        该回调通常由外部环境（如 Web 服务）在实例化策略后注入，用于在每日
+        回测循环中上报当前进度，从而在前端展示回测进度。
+
+        Args:
+            callback: 进度回调函数，入参为 (stage, current, total)，
+                      stage 为阶段标识（如 "selection" 或 "backtest"）；
+                      current 表示已完成交易日数量，total 表示总交易日数量。
+        """
+        self._progress_callback = callback
+
     def _tqdm_disable(self) -> bool:
         """
         根据运行模式决定是否禁用 tqdm 进度条。
@@ -121,18 +142,35 @@ class BaseStrategy(ABC):
 
     def run(self) -> bool:
         """
-        策略运行主流程
+        策略运行主流程。
+
+        该方法会依次执行：
+        1. `prepare` 预处理；
+        2. 按交易日历逐日回测（支持外部中止与进度回调）；
+        3. `end_of_backtest` 回测收尾与结果分析。
+
         Returns:
-            bool: 是否成功
+            bool: 是否成功。
         """
         self.prepare()
         # 遍历交易日历，逐日运行（最后一天不运行）
         trade_days = self.trade_calendar[:-1]
-        for trade_date in tqdm(trade_days, desc="回测进度", unit="日", disable=self._tqdm_disable()):
+        total_days = len(trade_days)
+        for idx, trade_date in enumerate(
+            tqdm(trade_days, desc="回测进度", unit="日", disable=self._tqdm_disable()),
+            start=1,
+        ):
             # 支持外部中止请求：在每日循环入口检查标记
             if self._is_stop_requested():
                 info(f"检测到中止回测请求，提前结束回测，最后交易日: {trade_date}")
                 break
+            # 向外部环境上报回测进度（如已注入回调）
+            if self._progress_callback is not None:
+                try:
+                    self._progress_callback("backtest", idx, total_days)
+                except Exception:
+                    # 进度回调失败不影响主流程，忽略异常即可
+                    pass
             proceed = self.before_open(trade_date)
             if proceed:
                 for minute_snapshot in self.minute_snapshots:
@@ -186,10 +224,12 @@ class BaseStrategy(ABC):
             max_workers = min(self._batch_stock_selection_threads, len(trade_days))
         else:
             max_workers = min((os.cpu_count() or 4), len(trade_days))
-        info(f"开始多线程选股: 共 {len(trade_days)} 个交易日, 线程数 {max_workers}")
-        with tqdm(total=len(trade_days), desc="选股进度", unit="日") as pbar:
+        total_days = len(trade_days)
+        info(f"开始多线程选股: 共 {total_days} 个交易日, 线程数 {max_workers}")
+        with tqdm(total=total_days, desc="选股进度", unit="日") as pbar:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_date = {executor.submit(self.get_selected_stock_list, d): d for d in trade_days}
+                completed = 0
                 for future in as_completed(future_to_date):
                     trade_date = future_to_date[future]
                     try:
@@ -198,6 +238,14 @@ class BaseStrategy(ABC):
                         debug(f"选股异常 trade_date={trade_date}: {e}")
                         self._selected_stock_by_date[trade_date] = []
                     pbar.update(1)
+                    completed += 1
+                    # 向外部环境上报选股进度（如已注入回调）
+                    if self._progress_callback is not None:
+                        try:
+                            self._progress_callback("selection", completed, total_days)
+                        except Exception:
+                            # 进度回调失败不影响主流程，忽略异常即可
+                            pass
         info("多线程选股完成")
 
     def get_daily_bars_for_selection(self, trade_date: str, count: int) -> dict:

@@ -164,6 +164,13 @@
                     </button>
                 </div>
                 <div id="status-bar" class="text-xs text-slate-400 h-10 leading-relaxed"></div>
+                <div class="space-y-1">
+                    <div class="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+                        <div id="progress-bar"
+                             class="h-full w-0 bg-emerald-500 transition-all duration-300 ease-out"></div>
+                    </div>
+                    <div id="progress-text" class="text-[11px] text-slate-500"></div>
+                </div>
             </div>
         </section>
 
@@ -280,6 +287,8 @@
 
     let isRunning = false;
     let statusTimer = null;
+    let lastProgressPercent = 0;
+    let lastProgressStage = "idle";
 
     // 设置回测运行状态（控制开始/中止按钮与 Loading）
     function setRunningState(running) {
@@ -301,6 +310,41 @@
             spinner.classList.add("hidden");
             text.textContent = "开始回测";
         }
+    }
+
+    /**
+     * 更新进度条与进度文案。
+     *
+     * @param {string} stage   阶段标识（selection/backtest/idle）
+     * @param {number} percent 进度百分比（0-100）
+     * @param {number} current 已完成交易日数
+     * @param {number} total   总交易日数
+     */
+    function updateProgress(stage, percent, current, total) {
+        const bar = document.getElementById("progress-bar");
+        const text = document.getElementById("progress-text");
+        if (!bar || !text) return;
+
+        const safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+        lastProgressPercent = safePercent;
+        lastProgressStage = stage || "idle";
+        bar.style.width = `${safePercent}%`;
+
+        if (!stage || stage === "idle") {
+            text.textContent = "";
+            return;
+        }
+
+        const isSelection = stage === "selection";
+        const label = isSelection ? "选股进度" : "回测进度";
+
+        if (!total) {
+            text.textContent = safePercent > 0
+                ? `${label}：准备中... ${safePercent.toFixed(1)}%`
+                : "";
+            return;
+        }
+        text.textContent = `${label}：${current}/${total} 日 (${safePercent.toFixed(1)}%)`;
     }
 
     // 启动/停止轮询后端运行状态
@@ -638,6 +682,7 @@
         try {
             setRunningState(true);
             setStatus("回测任务已提交，正在后台执行，可随时中止。");
+            updateProgress("selection", 0, 0, 0);
             startStatusPolling();
 
             const strategyModule = document.getElementById("strategy-module").value;
@@ -671,7 +716,7 @@
             const runId = resp.run_id;
             document.getElementById("current-run-id").textContent = `当前回测：${runId}`;
             // 后端在后台线程中执行回测，当前接口只返回 run_id
-            setStatus(`回测已启动，ID=${runId}，完成后可在历史回测中查看结果。`, "info");
+            setStatus(`回测已启动，ID=${runId}，完成后可在历史回测与右侧结果中查看。`, "info");
         } catch (e) {
             console.error(e);
             setStatus("回测执行失败，请查看日志。", "error");
@@ -689,6 +734,7 @@
             setRunningState(false);
             stopStatusPolling();
             setStatus(`已请求中止当前回测（run_id=${resp.run_id}），会在当前交易日结束后停止。`, "info");
+            updateProgress(lastProgressStage, lastProgressPercent, 0, 0);
         } catch (e) {
             console.error(e);
             setStatus("中止回测失败，请检查服务器日志。", "error");
@@ -702,10 +748,18 @@
         }
         try {
             const resp = await fetchJson("/api/backtests/status");
+            if (resp && typeof resp.percent === "number") {
+                updateProgress(resp.stage || "backtest", resp.percent, resp.current || 0, resp.total || 0);
+                if (resp.percent >= 100 && resp.running) {
+                    const stageLabel = (resp.stage === "selection") ? "选股" : "回测";
+                    setStatus(`${stageLabel}结果正在整理，请稍候...`, "info");
+                }
+            }
             if (!resp.running) {
                 setRunningState(false);
                 stopStatusPolling();
-                setStatus("当前回测已结束，可再次运行。", "info");
+                updateProgress(resp.stage || "backtest", 100, resp.total || 0, resp.total || 0);
+                setStatus("当前回测已结束，可在右侧查看结果并再次运行。", "info");
                 await loadRuns();
             }
         } catch (e) {
