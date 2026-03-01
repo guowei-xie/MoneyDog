@@ -42,6 +42,9 @@ class BacktestConfig(BaseModel):
     limit_vol_type: str
     max_vol_rate: float
     max_vol_amount: float
+    # 选股是否使用多线程（False=单线程，便于开发调试）
+    batch_stock_selection_use_threads: bool
+    # 多线程选股时的线程数（仅 use_threads=True 时生效，0=自动）
     batch_stock_selection_threads: int
 
 

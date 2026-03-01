@@ -132,11 +132,16 @@
                 </div>
             </div>
 
-            <!-- 多线程选股 -->
+            <!-- 选股方式：多线程 / 单线程 -->
             <div class="space-y-2">
-                <div class="text-xs font-medium text-slate-300">多线程选股</div>
+                <div class="text-xs font-medium text-slate-300">选股方式</div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input id="batch-use-threads" type="checkbox"
+                           class="rounded border-slate-600 bg-slate-800 text-emerald-500 focus:ring-emerald-500">
+                    <span class="text-[11px] text-slate-400">启用多线程选股（关闭则单线程，便于开发调试）</span>
+                </label>
                 <label class="block">
-                    <span class="text-[11px] text-slate-400">预选股线程数 (0 = 自动)</span>
+                    <span class="text-[11px] text-slate-400">预选股线程数 (0 = 自动，仅多线程时生效)</span>
                     <input id="batch-threads" type="number" step="1"
                            class="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-1.5 text-sm focus:border-emerald-500 focus:ring-emerald-500"
                            placeholder="0">
@@ -659,6 +664,7 @@
             document.getElementById("limit-vol-type").value = bt.limit_vol_type || "amount";
             document.getElementById("max-vol-rate").value = bt.max_vol_rate ?? "";
             document.getElementById("max-vol-amount").value = bt.max_vol_amount ?? "";
+            document.getElementById("batch-use-threads").checked = bt.batch_stock_selection_use_threads !== false;
             document.getElementById("batch-threads").value = bt.batch_stock_selection_threads ?? 0;
 
             setStatus("配置已加载。");
@@ -703,6 +709,7 @@
                     limit_vol_type: document.getElementById("limit-vol-type").value,
                     max_vol_rate: Number(document.getElementById("max-vol-rate").value),
                     max_vol_amount: Number(document.getElementById("max-vol-amount").value),
+                    batch_stock_selection_use_threads: document.getElementById("batch-use-threads").checked,
                     batch_stock_selection_threads: Number(document.getElementById("batch-threads").value),
                 },
             };

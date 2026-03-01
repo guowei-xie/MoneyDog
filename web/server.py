@@ -153,6 +153,11 @@ def _build_default_backtest_config(cfg: configparser.ConfigParser) -> BacktestCo
         limit_vol_type=cfg.get(section, "limit_vol_type", fallback="amount"),
         max_vol_rate=cfg.getfloat(section, "max_vol_rate", fallback=0.05),
         max_vol_amount=cfg.getfloat(section, "max_vol_amount", fallback=100_000),
+        batch_stock_selection_use_threads=cfg.getboolean(
+            section,
+            "batch_stock_selection_use_threads",
+            fallback=True,
+        ),
         batch_stock_selection_threads=cfg.getint(
             section,
             "batch_stock_selection_threads",
@@ -434,6 +439,11 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
     cfg.set("BACKTEST", "limit_vol_type", bt.limit_vol_type)
     cfg.set("BACKTEST", "max_vol_rate", str(bt.max_vol_rate))
     cfg.set("BACKTEST", "max_vol_amount", str(bt.max_vol_amount))
+    cfg.set(
+        "BACKTEST",
+        "batch_stock_selection_use_threads",
+        str(bt.batch_stock_selection_use_threads).lower(),
+    )
     cfg.set(
         "BACKTEST",
         "batch_stock_selection_threads",

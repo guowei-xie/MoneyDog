@@ -54,7 +54,14 @@ class BaseStrategy(ABC):
         except (TypeError, ValueError):
             self.verbose = False
         self.broker = Broker()
-        # 预选股线程数（0=自动）
+        # 选股是否使用多线程（False 时单线程顺序选股，便于开发调试）
+        try:
+            self._batch_stock_selection_use_threads = cfg.getboolean(
+                "BACKTEST", "batch_stock_selection_use_threads", fallback=True
+            )
+        except (TypeError, ValueError):
+            self._batch_stock_selection_use_threads = True
+        # 预选股线程数（仅多线程模式下生效，0=自动）
         try:
             self._batch_stock_selection_threads = int(
                 cfg.get("BACKTEST", "batch_stock_selection_threads", fallback="0"),
@@ -196,15 +203,17 @@ class BaseStrategy(ABC):
         self.global_stock_list = self._get_stock_list()
         info(f"获取股票池完成: {len(self.global_stock_list)} 只股票")
         
-        # 3. 多线程预选股并写入 _selected_stock_by_date
+        # 3. 批量预选股并写入 _selected_stock_by_date
         self._run_batch_stock_selection()
         
         return True
 
     def _run_batch_stock_selection(self) -> None:
         """
-        对所有交易日多线程执行选股，结果写入 self._selected_stock_by_date。
-        选股前一次性加载日线全量到内存，多线程只读内存；线程数由配置 batch_stock_selection_threads 决定，0 为自动。
+        对所有交易日执行选股，结果写入 self._selected_stock_by_date。
+        选股前一次性加载日线全量到内存；是否多线程由配置 batch_stock_selection_use_threads 控制，
+        True 时多线程选股（线程数由 batch_stock_selection_threads 决定，0 为自动），
+        False 时单线程顺序选股（便于开发调试）。
         """
         trade_days = self.trade_calendar[:-1]
         if not trade_days:
@@ -220,15 +229,57 @@ class BaseStrategy(ABC):
             count=-1,
         )
         info("日线全量数据加载完成")
+        total_days = len(trade_days)
+
+        if self._batch_stock_selection_use_threads:
+            self._run_batch_stock_selection_multi_thread(trade_days, total_days)
+        else:
+            self._run_batch_stock_selection_single_thread(trade_days, total_days)
+        info("选股完成")
+
+    def _run_batch_stock_selection_single_thread(
+        self, trade_days: List[str], total_days: int
+    ) -> None:
+        """
+        单线程顺序选股，便于开发调试（无多线程干扰，异常堆栈清晰）。
+        """
+        info(f"开始单线程选股: 共 {total_days} 个交易日")
+        for completed, trade_date in enumerate(
+            tqdm(trade_days, desc="选股进度", unit="日", disable=self._tqdm_disable()),
+            start=1,
+        ):
+            try:
+                self._selected_stock_by_date[trade_date] = self.get_selected_stock_list(
+                    trade_date
+                )
+            except Exception as e:
+                debug(f"选股异常 trade_date={trade_date}: {e}")
+                self._selected_stock_by_date[trade_date] = []
+            if self._progress_callback is not None:
+                try:
+                    self._progress_callback("selection", completed, total_days)
+                except Exception:
+                    pass
+
+    def _run_batch_stock_selection_multi_thread(
+        self, trade_days: List[str], total_days: int
+    ) -> None:
+        """
+        多线程选股，线程数由配置 batch_stock_selection_threads 决定，0 为自动。
+        """
         if self._batch_stock_selection_threads > 0:
             max_workers = min(self._batch_stock_selection_threads, len(trade_days))
         else:
             max_workers = min((os.cpu_count() or 4), len(trade_days))
-        total_days = len(trade_days)
         info(f"开始多线程选股: 共 {total_days} 个交易日, 线程数 {max_workers}")
-        with tqdm(total=total_days, desc="选股进度", unit="日") as pbar:
+        with tqdm(
+            total=total_days, desc="选股进度", unit="日", disable=self._tqdm_disable()
+        ) as pbar:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_date = {executor.submit(self.get_selected_stock_list, d): d for d in trade_days}
+                future_to_date = {
+                    executor.submit(self.get_selected_stock_list, d): d
+                    for d in trade_days
+                }
                 completed = 0
                 for future in as_completed(future_to_date):
                     trade_date = future_to_date[future]
@@ -239,14 +290,11 @@ class BaseStrategy(ABC):
                         self._selected_stock_by_date[trade_date] = []
                     pbar.update(1)
                     completed += 1
-                    # 向外部环境上报选股进度（如已注入回调）
                     if self._progress_callback is not None:
                         try:
                             self._progress_callback("selection", completed, total_days)
                         except Exception:
-                            # 进度回调失败不影响主流程，忽略异常即可
                             pass
-        info("多线程选股完成")
 
     def get_daily_bars_for_selection(self, trade_date: str, count: int) -> dict:
         """

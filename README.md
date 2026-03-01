@@ -172,7 +172,9 @@ max_vol_rate = 0.05
 # 当 limit_vol_type = amount 时生效（如 100000 表示单股最多 10 万）
 max_vol_amount = 100000
 
-# 多线程预选股线程数，0 表示自动（取 CPU 核数与交易日数较小值）
+# 选股是否使用多线程：True=多线程（生产），False=单线程（便于开发调试）
+batch_stock_selection_use_threads = True
+# 多线程选股时的线程数（仅 use_threads=True 时生效，0=自动）
 batch_stock_selection_threads = 0
 ```
 
@@ -331,7 +333,7 @@ flowchart TD
 - 获取交易日期列表：根据配置的回测时间区间生成交易日历
 - 获取股票池：默认使用主板股票池，子类可重写 `_get_stock_list()` 方法
 - 加载日线全量到内存：一次性从 DuckDB 读取日线行情至 `_daily_bars_cache`，供选股只读
-- 多线程预选股：按交易日多线程调用子类 `get_selected_stock_list(trade_date)`，结果写入 `_selected_stock_by_date`，带进度条；线程数由配置 `batch_stock_selection_threads` 控制（0 为自动）
+- 预选股：按交易日调用子类 `get_selected_stock_list(trade_date)`，结果写入 `_selected_stock_by_date`，带进度条。是否多线程由配置 `batch_stock_selection_use_threads` 控制（False=单线程，便于开发调试）；为 True 时线程数由 `batch_stock_selection_threads` 控制（0 为自动）
 
 **每日运行循环**
 - **开盘前（before_open）**：
