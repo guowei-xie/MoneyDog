@@ -20,6 +20,7 @@ from utils.data import (
 )
 from utils.logger import debug, info
 from utils.util import add_num_date_days, generate_minute_snapshot, get_elapsed_time_str
+from utils.backtest_config import refresh_backtest_config, is_verbose_mode
 from utils.broker import Broker
 from laboratory.analyze import analyze_account_changes, analyze_buy_and_sell_record
 
@@ -41,6 +42,7 @@ class BaseStrategy(ABC):
         self._progress_callback: Optional[Callable[[str, int, int], None]] = None
 
         # 每次实例化策略时重新读取配置，避免长生命周期进程中使用旧配置
+        refresh_backtest_config()
         cfg = configparser.ConfigParser()
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         config_path = os.path.join(project_root, "config.ini")
@@ -48,11 +50,8 @@ class BaseStrategy(ABC):
 
         self.backtest_start_time = cfg.get("BACKTEST", "backtest_start_time", fallback="")
         self.backtest_end_time = cfg.get("BACKTEST", "backtest_end_time", fallback="")
-        # 冗余日志开关：True=冗余模式，False=简约模式
-        try:
-            self.verbose = cfg.getboolean("BACKTEST", "verbose", fallback=False)
-        except (TypeError, ValueError):
-            self.verbose = False
+        # 冗余日志开关：与 utils.backtest_config 统一，Broker 等也据此输出买卖明细
+        self.verbose = is_verbose_mode()
         self.broker = Broker()
         # 选股是否使用多线程（False 时单线程顺序选股，便于开发调试）
         try:
@@ -85,12 +84,12 @@ class BaseStrategy(ABC):
 
     def _is_verbose_mode(self) -> bool:
         """
-        判断当前是否为冗余(verbose)模式。
+        判断当前是否为冗余(verbose)模式（与 utils.backtest_config 一致）。
 
         Returns:
             bool: True=冗余(verbose)，False=简约(simple)。
         """
-        return bool(getattr(self, "verbose", False))
+        return is_verbose_mode()
 
     def set_progress_callback(self, callback: Optional[Callable[[str, int, int], None]]) -> None:
         """
@@ -245,7 +244,7 @@ class BaseStrategy(ABC):
         """
         info(f"开始单线程选股: 共 {total_days} 个交易日")
         for completed, trade_date in enumerate(
-            tqdm(trade_days, desc="选股进度", unit="日", disable=self._tqdm_disable()),
+            tqdm(trade_days, desc="选股进度", unit="日"),
             start=1,
         ):
             try:
@@ -273,7 +272,7 @@ class BaseStrategy(ABC):
             max_workers = min((os.cpu_count() or 4), len(trade_days))
         info(f"开始多线程选股: 共 {total_days} 个交易日, 线程数 {max_workers}")
         with tqdm(
-            total=total_days, desc="选股进度", unit="日", disable=self._tqdm_disable()
+            total=total_days, desc="选股进度", unit="日"
         ) as pbar:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_date = {
@@ -357,7 +356,8 @@ class BaseStrategy(ABC):
         else:
             self.selected_stock_list = self.get_selected_stock_list(trade_date)
         self.selected_stock_list = [stock_code for stock_code in self.selected_stock_list if stock_code not in self.holding_stock_list]
-        self._info_verbose(f"自选股票列表（预买入）: {self.selected_stock_list}")
+        self._info_verbose(f"预选池股票数量: {len(self.selected_stock_list)}")
+        self._info_verbose(f"预选池股票列表: {self.selected_stock_list}")
         
         if not self.selected_stock_list and not self.holding_stock_list:
             self._info_verbose("没有自选股票和持仓股票，跳过策略开盘前运行")

@@ -3,6 +3,7 @@
 """
 import configparser
 from utils.logger import info, debug, error
+from utils.backtest_config import is_verbose_mode
 import pandas as pd
 from datetime import datetime
 from utils.util import time_str_to_datetime
@@ -34,6 +35,42 @@ class Broker:
         self.positions = {} # 持仓 {'stock_code': {'cost_price': cost_price, 'volume': volume, 'disabled_volume': disabled_volume}}
         self.transactions = [] # 交易记录 [{'stock_code': stock_code, 'price': price, 'volume': volume, 'action': action, 'cost_price': cost_price, 'time': time}]
         self.position_and_account_changes = [] # 持仓与账户信息变动记录 [{'trade_date': trade_date, 'stock_count': stock_count, 'stock_cost': stock_cost, 'stock_value': stock_value, 'available_amount': available_amount, 'total_assets': total_assets}]
+        # 冗余模式：与 config [BACKTEST] verbose 一致，为 True 时买卖明细以 info 输出
+        self.verbose = is_verbose_mode()
+
+    def _log_trade(
+        self,
+        action: str,
+        stock_code: str,
+        price: float,
+        volume: int,
+        total_cost: float,
+        commission: float,
+        tax: float,
+        time: str,
+        desc: str,
+    ) -> None:
+        """
+        根据冗余模式输出买卖明细：verbose 时用 info，否则用 debug。
+        """
+        time_dt = time_str_to_datetime(time)
+        if action == "买入":
+            msg = f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，时间: {time_dt}，描述: {desc}"
+        else:
+            msg = f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，印花税: {round(tax, 2)}，时间: {time_dt}，描述: {desc}"
+        if self.verbose:
+            info(msg)
+        else:
+            debug(msg)
+
+    def _log_trade_extra(self) -> None:
+        """冗余模式下额外输出当前可用资金与持仓。"""
+        if self.verbose:
+            info(f"当前可用资金: {self.available_amount}")
+            info(f"当前持仓: {self.positions}")
+        else:
+            debug(f"当前可用资金: {self.available_amount}")
+            debug(f"当前持仓: {self.positions}")
 
     def buy(self, signal: dict) -> bool:
         """
@@ -83,9 +120,8 @@ class Broker:
             desc=desc,
             minute_k_count=minute_k_count,
         )
-        debug(f"买入 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
-        debug(f"当前可用资金: {self.available_amount}")
-        debug(f"当前持仓: {self.positions}")
+        self._log_trade("买入", stock_code, price, volume, total_cost, commission, 0, time, desc)
+        self._log_trade_extra()
         return True
 
     def sell(self, signal: dict) -> bool:
@@ -131,9 +167,8 @@ class Broker:
             desc=desc,
             minute_k_count=minute_k_count,
         )
-        debug(f"卖出 {stock_code}，价格: {price}，数量: {volume}，金额: {round(total_cost, 2)}，佣金: {round(commission, 2)}，印花税: {round(tax, 2)}，时间: {time_str_to_datetime(time)}，描述: {desc}")
-        debug(f"当前可用资金: {self.available_amount}")
-        debug(f"当前持仓: {self.positions}")
+        self._log_trade("卖出", stock_code, price, volume, total_cost, commission, tax, time, desc)
+        self._log_trade_extra()
         return True
 
     # 单股买入数量
