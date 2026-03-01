@@ -37,13 +37,17 @@ class BreakPrevHighLimitUp(BaseStrategy):
         self.sell_macd_min_bars = 5
         # 卖出：炸板判定，距离最近一次封板分钟数 >= N 即视为炸板
         self.sell_broken_limit_gap_minutes = 3
+        # 选股：T~T-n 日区间涨幅不能大于 m（n=区间交易日数，m=最大涨幅比例）
+        self.interval_days = 10
+        self.interval_max_change_pct = 0.25
 
     def get_selected_stock_list(self, trade_date: str) -> List[str]:
         """
         获取自选股票列表（预买入）
         先借未来函数用 T+1 日最高涨幅缩池，再仅对缩池结果取 90 日线做实体前高筛选，减少行情数据量与内存占用。
         条件1（未来函数，仅用于缩池）：T+1 交易日最高涨幅 >= limit_near_pct，与买入“接近涨停”阈值一致。
-        条件2：当前交易日收盘价 > 近 lookback_days 日实体最高价 * (1 - margin_pct)；近90日最高价不含 T 日（仅取 T 日前数据）。
+        条件2：当前交易日收盘价 > 近 lookback_days 日实体最高价 * (1 - margin_pct)，且 T 日收盘价不能高于前高价；近90日最高价不含 T 日。
+        条件3：T~T-n 日区间涨幅不能大于 interval_max_change_pct（n=interval_days）。
         Args:
             trade_date: 交易日期
         Returns:
@@ -90,16 +94,25 @@ class BreakPrevHighLimitUp(BaseStrategy):
                 count=self.lookback_days,
             )
         result = []
+        min_bars = max(2, self.interval_days + 1)
         for stock_code, df in daily_bars.items():
-            if df.empty or len(df) < 2:
+            if df.empty or len(df) < min_bars:
                 continue
             # 近90日实体最高价不含 T 日，仅用 T 日前数据
             df_before_t = df.iloc[:-1]
             entity_high = df_before_t[["open", "close"]].max(axis=1).max()
             threshold = entity_high * (1 - self.margin_pct)
-            current_close = df.iloc[-1]["close"]
-            if current_close > threshold:
-                result.append(stock_code)
+            current_close = float(df.iloc[-1]["close"])
+            if current_close <= threshold or current_close > entity_high:
+                continue
+            # T~T-n 日区间涨幅不能大于 m
+            close_t_n = float(df.iloc[-(self.interval_days + 1)]["close"])
+            if close_t_n <= 0:
+                continue
+            interval_change = (current_close - close_t_n) / close_t_n
+            if interval_change > self.interval_max_change_pct:
+                continue
+            result.append(stock_code)
         return result
 
     def set_cached(self, trade_date: str) -> bool:
