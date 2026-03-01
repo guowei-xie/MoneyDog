@@ -65,12 +65,14 @@ class Broker:
 
     def _log_trade_extra(self) -> None:
         """冗余模式下额外输出当前可用资金与持仓。"""
-        if self.verbose:
-            info(f"当前可用资金: {self.available_amount}")
-            info(f"当前持仓: {self.positions}")
-        else:
-            debug(f"当前可用资金: {self.available_amount}")
-            debug(f"当前持仓: {self.positions}")
+        # if self.verbose:
+        #     info(f"当前可用资金: {self.available_amount}")
+        #     info(f"当前持仓: {self.positions}")
+        # else:
+        #     debug(f"当前可用资金: {self.available_amount}")
+        #     debug(f"当前持仓: {self.positions}")
+        debug(f"当前可用资金: {self.available_amount}")
+        debug(f"当前持仓: {self.positions}")
 
     def buy(self, signal: dict) -> bool:
         """
