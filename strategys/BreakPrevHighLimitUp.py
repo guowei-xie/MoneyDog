@@ -37,9 +37,14 @@ class BreakPrevHighLimitUp(BaseStrategy):
         self.sell_macd_min_bars = 5
         # 卖出：炸板判定，距离最近一次封板分钟数 >= N 即视为炸板
         self.sell_broken_limit_gap_minutes = 3
-        # 选股：T~T-n 日区间涨幅不能大于 m（n=区间交易日数，m=最大涨幅比例）
+        # 选股：T~T-n 日区间振幅不能大于 m（n=区间交易日数，m=最大振幅，最高价/最低价-1）
         self.interval_days = 10
-        self.interval_max_change_pct = 0.25
+        self.interval_max_amplitude_pct = 0.30
+        # 选股：近 interval_days 日内涨停次数最多允许 n 次（n=2 即最多 2 次）
+        self.max_limit_count_in_recent_days = 1
+        # 选股：近1年涨停次数不低于 min_limit_count；统计区间交易日数
+        self.limit_count_check_days = 250
+        self.min_limit_count = 1
 
     def get_selected_stock_list(self, trade_date: str) -> List[str]:
         """
@@ -47,7 +52,9 @@ class BreakPrevHighLimitUp(BaseStrategy):
         先借未来函数用 T+1 日最高涨幅缩池，再仅对缩池结果取 90 日线做实体前高筛选，减少行情数据量与内存占用。
         条件1（未来函数，仅用于缩池）：T+1 交易日最高涨幅 >= limit_near_pct，与买入“接近涨停”阈值一致。
         条件2：当前交易日收盘价 > 近 lookback_days 日实体最高价 * (1 - margin_pct)，且 T 日收盘价不能高于前高价；近90日最高价不含 T 日。
-        条件3：T~T-n 日区间涨幅不能大于 interval_max_change_pct（n=interval_days）。
+        条件3：T~T-n 日区间振幅不能大于 interval_max_amplitude_pct（n=interval_days），振幅=区间最高价/最低价-1。
+        条件4：近 interval_days 日内涨停次数不能超过 max_limit_count_in_recent_days（默认最多 2 次）。
+        条件5：近 limit_count_check_days 日涨停次数不低于 min_limit_count。
         Args:
             trade_date: 交易日期
         Returns:
@@ -80,37 +87,50 @@ class BreakPrevHighLimitUp(BaseStrategy):
         if not t1_candidates:
             return []
 
-        # 2. 仅对缩池后的股票取 90 日线，再做实体前高选股，降低 90 日数据量与内存
+        # 2. 取日线（需覆盖区间振幅与近1年涨停统计），再做实体前高与涨停相关筛选
+        bars_count = max(self.lookback_days, self.limit_count_check_days)
         if self._daily_bars_cache is not None:
             daily_bars = get_daily_bars_from_cache(
-                self._daily_bars_cache, t1_candidates, trade_date, self.lookback_days
+                self._daily_bars_cache, t1_candidates, trade_date, bars_count
             )
         else:
             daily_bars = get_daily_bars(
-                t1_candidates,
-                "1d",
-                start_time="",
-                end_time=trade_date,
-                count=self.lookback_days,
+                t1_candidates, "1d", start_time="", end_time=trade_date, count=bars_count
             )
         result = []
         min_bars = max(2, self.interval_days + 1)
         for stock_code, df in daily_bars.items():
             if df.empty or len(df) < min_bars:
                 continue
-            # 近90日实体最高价不含 T 日，仅用 T 日前数据
             df_before_t = df.iloc[:-1]
             entity_high = df_before_t[["open", "close"]].max(axis=1).max()
             threshold = entity_high * (1 - self.margin_pct)
             current_close = float(df.iloc[-1]["close"])
             if current_close <= threshold or current_close > entity_high:
                 continue
-            # T~T-n 日区间涨幅不能大于 m
-            close_t_n = float(df.iloc[-(self.interval_days + 1)]["close"])
-            if close_t_n <= 0:
+            # T~T-n 日区间振幅 = 区间最高价/最低价 - 1，不能大于 interval_max_amplitude_pct
+            interval_slice = df.iloc[-(self.interval_days + 1) :]
+            interval_low = float(interval_slice["low"].min())
+            if interval_low <= 0:
                 continue
-            interval_change = (current_close - close_t_n) / close_t_n
-            if interval_change > self.interval_max_change_pct:
+            amplitude = float(interval_slice["high"].max()) / interval_low - 1
+            if amplitude > self.interval_max_amplitude_pct:
+                continue
+            # 近 interval_days 日内涨停次数不能超过 n 次
+            recent = df.iloc[-self.interval_days:]
+            recent_limit_count = sum(
+                1 for _, row in recent.iterrows()
+                if not pd.isna(row.get("preClose")) and is_limit(stock_code, row["close"], row["preClose"])
+            )
+            if recent_limit_count > self.max_limit_count_in_recent_days:
+                continue
+            # 近1年涨停次数不低于 min_limit_count（参考 N_Pattern_Breakout_V2）
+            last_n = df.iloc[-self.limit_count_check_days:] if len(df) >= self.limit_count_check_days else df
+            limit_up_count = sum(
+                1 for _, row in last_n.iterrows()
+                if not pd.isna(row.get("preClose")) and is_limit(stock_code, row["close"], row["preClose"])
+            )
+            if limit_up_count < self.min_limit_count:
                 continue
             result.append(stock_code)
         return result
