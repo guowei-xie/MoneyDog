@@ -12,7 +12,7 @@ MoneyDog(旺财) 是一个基于 **Python + 本地 DuckDB 数据库** 的量化�
 - **多线程选股**: 回测前一次性加载日线全量到内存，按交易日多线程预选股并缓存，遍历交易日时直接取用，提升回测效率
 - **技术分析**: 内置多种 K 线、均线、量能、MACD 等技术指标与图形识别算法
 - **模拟交易**: 支持资金管理、持仓管理、佣金与印花税精细计算
-- **数据管理**: 使用 DuckDB 本地库 (`data/stock.duckdb`) 存储日线与分钟线行情
+- **数据管理**: 使用 DuckDB 本地库存储日线、分钟线与交易日历（表：`stock_1day_bars` / `stock_1m_bars` / `index_1day_bars` / `trade_calendar`），路径由 `config.ini` 的 `data_path` 指定
 - **结果分析**: 自动导出交易记录、账户曲线与分析结果 Excel
 - **日志系统**: 全量记录回测过程，便于诊断与调优
 
@@ -27,8 +27,7 @@ MoneyDog/
 ├── config.ini             # 实际配置文件
 ├── config.example.ini     # 配置文件示例
 ├── requirements.txt       # 依赖包列表
-├── data/
-│   └── stock.duckdb       # 行情数据 DuckDB 库（需预先准备）
+├── (DuckDB 库由 config.ini [DATA] data_path 指定，可与项目分离，如 ../MoneyDog_db/data/moneydog.duckdb)
 ├── web/                  # Web 前端与 API 服务
 │   ├── server.py         # FastAPI 应用入口（浏览器控制台）
 │   ├── templates/        # Web 界面模板（单页控制台）
@@ -52,7 +51,7 @@ MoneyDog/
 └── results/               # 回测输出结果（Excel）
 ```
 
-> 说明：历史版本中曾依赖 QMT / XTQuant，目前代码以本地 DuckDB + AKShare 为主，相关 QMT/XTQuant 目录已移除。
+> 说明：历史版本中曾依赖 QMT / XTQuant，目前行情与交易日历均从本地 DuckDB 读取，相关 QMT/XTQuant 目录已移除。
 
 ---
 
@@ -61,7 +60,7 @@ MoneyDog/
 ### 环境要求
 
 - **Python** ≥ 3.8
-- 推荐在 **Windows** 环境下运行（日志、路径等默认按 Windows 习惯编写）
+- 支持 **Windows / macOS / Linux**，日志与路径均按当前系统处理
 
 ### 安装步骤
 
@@ -104,14 +103,17 @@ MoneyDog/
 
 5. **准备 DuckDB 数据库**
 
-- 在 `config.ini` 中指定 DuckDB 路径（默认 `data/stock.duckdb`）
-- 通过自有脚本将日线与 1 分钟线行情写入对应表（如 `stock_list`、`daily_1day`、`daily_1min`）
+- 在 `config.ini` 的 `[DATA]` 段中设置 `data_path`，指向已准备好的 DuckDB 文件（可为绝对路径，如 `/path/to/moneydog.duckdb`）
+- 库内需包含以下表结构（时间戳均为**秒**级）：
 
-当前代码假定 DuckDB 中至少存在：
+| 表名 | 说明 | 主要字段 |
+|------|------|----------|
+| `stock_1day_bars` | 股票日 K | code, timestamp, open, high, low, close, volume, amount |
+| `stock_1m_bars` | 股票 1 分钟 K | 同上 |
+| `index_1day_bars` | 指数日 K（如上证） | code 无后缀如 000001，其余同上 |
+| `trade_calendar` | 交易日历 | trade_date, timestamp |
 
-- `stock_list`：包含 `code` 字段，用于构建主板股票池
-- `daily_1day`：日线行情，包含 `code, time, open, high, low, close, volume, amount`
-- `daily_1min`：1 分钟行情，字段同上
+- 股票池由 `stock_1day_bars` 的 `code` 去重得到（仅保留 6 位数字+后缀的标准代码）；指数在策略中仍可用 `000001.SH`，代码内会映射为库中的 `000001`
 
 ---
 
@@ -127,8 +129,8 @@ MoneyDog/
 level = INFO
 
 [DATA]
-# DuckDB 行情数据库路径
-data_path = data/stock.duckdb
+# DuckDB 行情数据库路径（建议使用新库 moneydog.duckdb，含 stock_1day_bars / stock_1m_bars / index_1day_bars / trade_calendar）
+data_path = /path/to/moneydog.duckdb
 ```
 
 ### 策略配置
@@ -213,7 +215,7 @@ python app.py
 
 2. **运行回测**
 
-   确保 `config.ini` 与 `data/stock.duckdb` 准备妥当后，在项目根目录执行：
+   确保 `config.ini` 中 `data_path` 指向的 DuckDB 已准备妥当后，在项目根目录执行：
 
    ```bash
    python main.py
@@ -488,10 +490,8 @@ python main.py
 
 ### 扩展数据接口
 
-- `utils/data.py` 中目前主要通过 DuckDB 读取已经准备好的行情数据
-- 可以：
-  - 增加从 AKShare 直接获取数据并写入 DuckDB 的辅助函数
-  - 接入其他数据源（如本地 CSV/Parquet 或第三方行情接口），统一写入 DuckDB
+- `utils/data.py` 从 DuckDB 读取行情与交易日历（表名与时间戳已按新库 `stock_1day_bars` / `stock_1m_bars` / `index_1day_bars` / `trade_calendar` 适配；分时时间戳已做北京时间 8 小时校正）
+- 可扩展：接入其他数据源写入同一 DuckDB 表结构，或增加数据更新脚本
 
 ---
 
