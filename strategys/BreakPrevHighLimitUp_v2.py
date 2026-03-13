@@ -165,10 +165,33 @@ class BreakPrevHighLimitUp(BaseStrategy):
             self.cached[stock_code]["top_macd"] = 0.0
         return True
 
+    def _is_intraday_macd_rising(self, stock_code: str, bars: pd.DataFrame) -> bool:
+        """
+        判断分时 MACD 是否走强：当前分时 MACD 必须严格大于上一根分时 MACD。
+
+        Args:
+            stock_code: 股票代码（用于日志）
+            bars: 分时K线快照（DataFrame）
+        Returns:
+            bool: 满足条件返回 True，否则 False
+        """
+        if bars is None or getattr(bars, "empty", True) or len(bars) < 2:
+            return False
+        macd_data = get_macd(bars)
+        if macd_data is None or getattr(macd_data, "empty", True) or len(macd_data) < 2:
+            return False
+        current_macd = macd_data.iloc[-1].get("macd")
+        prev_macd = macd_data.iloc[-2].get("macd")
+        if pd.isna(current_macd) or pd.isna(prev_macd):
+            debug(f"{stock_code} 分时MACD无效: current={current_macd}, prev={prev_macd}")
+            return False
+        return float(current_macd) > float(prev_macd)
+
     def buy_signal(self, stock_code: str, bars: pd.DataFrame) -> Optional[Dict]:
         """
         买入信号：同时满足 (1)涨幅接近涨停 (2)当日最低或昨日收盘低于前高 (3)当前分时价高于前高；
         且当前分时之前未出现过涨幅>limit_near_pct，开盘价涨幅也不超过 limit_near_pct；
+        且当前分时 MACD 大于上一根分时 MACD；
         且仅在 9:30~11:00 内买入（分时 bars 数量 <= buy_max_bars，第 90 根即 11:00）。
         Args:
             stock_code: 股票代码
@@ -195,11 +218,11 @@ class BreakPrevHighLimitUp(BaseStrategy):
         day_open = float(bars.iloc[0]["open"])
         if day_open > limit_threshold:
             return None
-        # 当前分时之前，没有发生过涨幅大于 limit_near_pct（此前 bars 的最高价未超过该涨幅）
-        if len(bars) > 1:
-            high_before_current = float(bars.iloc[:-1]["high"].max())
-            if high_before_current >= limit_threshold:
-                return None
+        # # 当前分时之前，没有发生过涨幅大于 limit_near_pct（此前 bars 的最高价未超过该涨幅）
+        # if len(bars) > 1:
+        #     high_before_current = float(bars.iloc[:-1]["high"].max())
+        #     if high_before_current >= limit_threshold:
+        #         return None
 
         # 1. 当前涨幅是否接近涨停：当前分时价/昨日收盘价 >= limit_near_pct
         if current_price / pre_close < (1 + self.limit_near_pct):
@@ -209,6 +232,11 @@ class BreakPrevHighLimitUp(BaseStrategy):
             return None
         # 3. 当前分时价格是否已高于前高价格线
         if current_price <= prev_high:
+            return None
+
+        # 4. 当前分时 MACD 必须大于上一根分时 MACD
+        if not self._is_intraday_macd_rising(stock_code, bars):
+            debug(f"{stock_code} 买入过滤: 分时MACD未走强")
             return None
 
         buy_volume = self.broker.get_buy_volume(current_price)
