@@ -55,6 +55,7 @@ class BreakPrevHighLimitUp(BaseStrategy):
         条件3：T~T-n 日区间振幅不能大于 interval_max_amplitude_pct（n=interval_days），振幅=区间最高价/最低价-1。
         条件4：近 interval_days 个交易日不能有涨停。
         条件5：近 limit_count_check_days 日涨停次数不低于 min_limit_count。
+        条件6：T 日日线 MACD 不能低于 T-1 日日线 MACD；但当 T 日 MACD 为正值时不做该判断。
         Args:
             trade_date: 交易日期
         Returns:
@@ -102,6 +103,9 @@ class BreakPrevHighLimitUp(BaseStrategy):
         for stock_code, df in daily_bars.items():
             if df.empty or len(df) < min_bars:
                 continue
+            # 日线 MACD 过滤（正值放行；非正值要求不走弱）
+            if not self._pass_daily_macd_filter(stock_code, df):
+                continue
             df_before_t = df.iloc[:-1]
             entity_high = df_before_t[["open", "close"]].max(axis=1).max()
             threshold = entity_high * (1 - self.margin_pct)
@@ -133,6 +137,38 @@ class BreakPrevHighLimitUp(BaseStrategy):
                 continue
             result.append(stock_code)
         return result
+
+    def _pass_daily_macd_filter(self, stock_code: str, daily_df: pd.DataFrame) -> bool:
+        """
+        预选股日线 MACD 过滤：
+        - 若 T 日 MACD > 0：不做“不能低于昨日”的判断，直接放行；
+        - 否则要求 T 日 MACD >= T-1 日 MACD（避免 MACD 走弱的标的进入预选池）。
+
+        Args:
+            stock_code: 股票代码（用于日志）
+            daily_df: 覆盖到 T 日的日线数据（最后一行视为 T 日）
+        Returns:
+            bool: 通过过滤返回 True，否则 False
+        """
+        if daily_df is None or getattr(daily_df, "empty", True) or len(daily_df) < 2:
+            return False
+        macd_data = get_macd(daily_df)
+        if macd_data is None or getattr(macd_data, "empty", True) or len(macd_data) < 2:
+            debug(f"{stock_code} 预选过滤: 日线MACD数据不足")
+            return False
+        macd_t = macd_data.iloc[-1].get("macd")
+        macd_t1 = macd_data.iloc[-2].get("macd")
+        if pd.isna(macd_t) or pd.isna(macd_t1):
+            debug(f"{stock_code} 预选过滤: 日线MACD无效 macd_t={macd_t}, macd_t-1={macd_t1}")
+            return False
+        macd_t = float(macd_t)
+        macd_t1 = float(macd_t1)
+        if macd_t > 0:
+            return True
+        if macd_t < macd_t1:
+            debug(f"{stock_code} 预选过滤: 日线MACD走弱 macd_t={macd_t:.6f} < macd_t-1={macd_t1:.6f}")
+            return False
+        return True
 
     def set_cached(self, trade_date: str) -> bool:
         """
