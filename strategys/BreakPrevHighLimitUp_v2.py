@@ -6,9 +6,10 @@
 """
 import pandas as pd
 from typing import List, Dict, Optional
+import threading
 
 from strategys.BaseStrategy import BaseStrategy
-from utils.data import get_daily_bars, get_daily_bars_from_cache
+from utils.data import get_daily_bars, get_daily_bars_from_cache, has_index_1day_data
 from utils.util import convert_to_safe_sell_volume, add_num_date_days
 from laboratory.multipleK import get_macd, is_macd_top
 from laboratory.singleK import is_limit, get_limit_price
@@ -45,6 +46,16 @@ class BreakPrevHighLimitUp(BaseStrategy):
         self.min_limit_count = 1
         # 买入：仅在此时间窗内允许买入，用分时 bars 数量判断；第 90 根即 11:00（9:30 起算）
         self.buy_max_bars = 90
+        # 指数闸门：中证1000（默认 000852.SH），用于盘前预选“总闸门”
+        self.csi1000_index_code = "000852.SH"
+        # 指数闸门缓存：避免多线程选股阶段并发读 DuckDB，并避免反复重算 MACD
+        self._csi1000_macd_df: Optional[pd.DataFrame] = None
+        self._csi1000_has_data: Optional[bool] = None
+        self._csi1000_cache_loaded: bool = False  # 是否已完成一次加载尝试（无论是否成功）
+        self._csi1000_cache_lock = threading.Lock()
+        # 日志去重：避免每个交易日重复刷“跳过过滤”的提示
+        self._csi1000_skip_logged: bool = False
+        self._csi1000_load_failed_logged: bool = False
 
     def get_selected_stock_list(self, trade_date: str) -> List[str]:
         """
@@ -61,6 +72,10 @@ class BreakPrevHighLimitUp(BaseStrategy):
         Returns:
             List[str]: 自选股票列表
         """
+        # 指数（中证1000）趋势过滤：若数据库存在该指数日线，则要求 T 日 MACD 不下行，否则当天放弃预选
+        if not self._pass_csi1000_macd_gate(trade_date):
+            return []
+
         next_trade_day = add_num_date_days(trade_date, 1, self.trade_calendar)
         # 1. 仅取 T+1 的 2 根 K 线（全市场），筛选出 T+1 最高涨幅 >= limit_near_pct 的股票，缩小后续取数范围
         if self._daily_bars_cache is not None:
@@ -138,6 +153,98 @@ class BreakPrevHighLimitUp(BaseStrategy):
             result.append(stock_code)
         return result
 
+    def _pass_csi1000_macd_gate(self, trade_date: str) -> bool:
+        """
+        盘前指数闸门（中证1000）：
+        - 先从数据库检查是否有中证1000（默认按 000852.SH）指数的日线数据；
+        - 若无数据：不影响原选股流程，直接放行；
+        - 若有数据：取到 T 日的指数日线，计算 MACD，要求 T 日 MACD >= T-1 日 MACD（不能下行），否则当天放弃预选。
+
+        Args:
+            trade_date: 交易日（T 日），格式 'YYYYMMDD'
+
+        Returns:
+            bool: 通过闸门返回 True，否则 False
+        """
+        self._ensure_csi1000_cache_loaded(trade_date)
+        if not self._csi1000_has_data:
+            if not self._csi1000_skip_logged:
+                debug(f"指数闸门: 数据库无中证1000日线({self.csi1000_index_code})，跳过指数过滤")
+                self._csi1000_skip_logged = True
+            return True
+
+        macd_df = self._csi1000_macd_df
+        if macd_df is None or macd_df.empty or len(macd_df) < 2:
+            if not self._csi1000_load_failed_logged:
+                debug("指数闸门: 中证1000日线/MACD加载失败或不足，跳过指数过滤（仅提示一次）")
+                self._csi1000_load_failed_logged = True
+            return True
+
+        # 全量 MACD 已在加载时算好，这里只按交易日切片取最后两根
+        macd_upto_t = macd_df.loc[macd_df.index <= trade_date]
+        if len(macd_upto_t) < 2:
+            debug(f"指数闸门: 中证1000日线不足(<=T)，跳过过滤 trade_date={trade_date}")
+            return True
+
+        macd_t = macd_upto_t.iloc[-1].get("macd")
+        macd_t1 = macd_upto_t.iloc[-2].get("macd")
+        if pd.isna(macd_t) or pd.isna(macd_t1):
+            debug(f"指数闸门: 中证1000 MACD无效 macd_t={macd_t}, macd_t-1={macd_t1}，跳过过滤")
+            return True
+
+        macd_t = float(macd_t)
+        macd_t1 = float(macd_t1)
+        if macd_t < macd_t1:
+            debug(
+                f"指数闸门: 中证1000 MACD下行，放弃当天预选 trade_date={trade_date} macd_t={macd_t:.6f} < macd_t-1={macd_t1:.6f}"
+            )
+            return False
+        return True
+
+    def _ensure_csi1000_cache_loaded(self, trade_date: str) -> None:
+        """
+        确保中证1000指数缓存已初始化（一次完成、无论是否成功都不再重试）：
+        - 缓存“是否存在指数日线数据”
+        - 若存在则一次性加载全量日线并预计算 MACD，供后续按 trade_date 切片复用
+
+        Args:
+            trade_date: 当前交易日（用于兜底 end_time）
+        """
+        if self._csi1000_cache_loaded:
+            return
+        with self._csi1000_cache_lock:
+            if self._csi1000_cache_loaded:
+                return
+            self._csi1000_has_data = bool(has_index_1day_data(self.csi1000_index_code))
+            if self._csi1000_has_data:
+                end_time = getattr(self, "backtest_end_time", "") or trade_date
+                bars = get_daily_bars(
+                    [self.csi1000_index_code],
+                    "1d",
+                    start_time="",
+                    end_time=end_time,
+                    count=-1,
+                    table_name="index_daily",
+                )
+                df = bars.get(self.csi1000_index_code) if isinstance(bars, dict) else None
+                if df is not None and not df.empty:
+                    self._csi1000_macd_df = get_macd(df)
+            self._csi1000_cache_loaded = True
+
+    @staticmethod
+    def _macd_last_two(daily_df: pd.DataFrame) -> Optional[tuple]:
+        """对日线 df 计算 MACD 并返回 (macd_T, macd_T-1)；任一非法则返回 None。"""
+        if daily_df is None or getattr(daily_df, "empty", True) or len(daily_df) < 2:
+            return None
+        macd_data = get_macd(daily_df)
+        if macd_data is None or getattr(macd_data, "empty", True) or len(macd_data) < 2:
+            return None
+        macd_t = macd_data.iloc[-1].get("macd")
+        macd_t1 = macd_data.iloc[-2].get("macd")
+        if pd.isna(macd_t) or pd.isna(macd_t1):
+            return None
+        return float(macd_t), float(macd_t1)
+
     def _pass_daily_macd_filter(self, stock_code: str, daily_df: pd.DataFrame) -> bool:
         """
         预选股日线 MACD 过滤：
@@ -150,19 +257,11 @@ class BreakPrevHighLimitUp(BaseStrategy):
         Returns:
             bool: 通过过滤返回 True，否则 False
         """
-        if daily_df is None or getattr(daily_df, "empty", True) or len(daily_df) < 2:
+        pair = self._macd_last_two(daily_df)
+        if pair is None:
+            debug(f"{stock_code} 预选过滤: 日线MACD数据不足或无效")
             return False
-        macd_data = get_macd(daily_df)
-        if macd_data is None or getattr(macd_data, "empty", True) or len(macd_data) < 2:
-            debug(f"{stock_code} 预选过滤: 日线MACD数据不足")
-            return False
-        macd_t = macd_data.iloc[-1].get("macd")
-        macd_t1 = macd_data.iloc[-2].get("macd")
-        if pd.isna(macd_t) or pd.isna(macd_t1):
-            debug(f"{stock_code} 预选过滤: 日线MACD无效 macd_t={macd_t}, macd_t-1={macd_t1}")
-            return False
-        macd_t = float(macd_t)
-        macd_t1 = float(macd_t1)
+        macd_t, macd_t1 = pair
         if macd_t > 0:
             return True
         if macd_t < macd_t1:

@@ -20,7 +20,33 @@ _TABLE_MAP = {
 }
 
 # 指数 code 映射：策略常用 000001.SH，新库为 000001
-_INDEX_CODE_TO_DB = {"000001.SH": "000001"}
+_INDEX_CODE_TO_DB = {
+    "000001.SH": "000001",
+    # 中证1000（常见代码：000852.SH；库内通常无后缀）
+    "000852.SH": "000852",
+}
+
+
+def has_index_1day_data(index_code: str) -> bool:
+    """
+    检查数据库中是否存在指定指数的日线行情数据（index_1day_bars）。
+
+    Args:
+        index_code: 指数代码，支持带后缀（如 '000852.SH'）或库内代码（如 '000852'）
+
+    Returns:
+        bool: 存在返回 True，否则 False
+    """
+    if not index_code:
+        return False
+    db_code = _INDEX_CODE_TO_DB.get(index_code, index_code)
+    try:
+        sql = 'SELECT 1 AS ok FROM "index_1day_bars" WHERE code = ? LIMIT 1'
+        df = duckdb_helper.conn.execute(sql, [db_code]).df()
+        return not df.empty
+    except Exception as e:
+        error(f"检查指数日线数据失败 index_code={index_code}: {e}")
+        return False
 
 
 def get_trade_calendar(start_time: str, end_time: str, format: str = "number") -> list:
