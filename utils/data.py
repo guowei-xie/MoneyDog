@@ -105,6 +105,44 @@ def get_stock_list_in_sector(sector_name: str) -> list:
         error(f"获取股票列表失败: {e}")
         raise RuntimeError(f"获取股票列表失败: {e}") from e
 
+def _coverage_for_table(table: str, code: str) -> dict:
+    """查询某表中指定 code 的数据覆盖（起止日期与条数）。time 为毫秒时间戳。"""
+    try:
+        sql = f'SELECT min(time) AS mn, max(time) AS mx, count(*) AS c FROM "{table}" WHERE code = ?'
+        row = duckdb_helper.conn.execute(sql, [code]).df().iloc[0]
+    except Exception as e:
+        error(f"查询数据覆盖失败 table={table} code={code}: {e}")
+        return {"start": None, "end": None, "count": 0}
+    count = int(row["c"]) if row["c"] is not None else 0
+    if not count or pd.isna(row["mn"]):
+        return {"start": None, "end": None, "count": 0}
+
+    def _to_date(ms) -> str:
+        return pd.to_datetime(int(ms), unit="ms", utc=True).tz_convert("Asia/Shanghai").strftime("%Y-%m-%d")
+
+    return {"start": _to_date(row["mn"]), "end": _to_date(row["mx"]), "count": count}
+
+
+def get_data_coverage(code: str, market: str = "stock") -> dict:
+    """
+    获取指定代码的数据覆盖情况（起止日期、条数），供前端行情浏览展示。
+
+    Args:
+        code: 个股代码（如 000001.SZ）或指数代码（如 000001.SH，需 market='index'）
+        market: 'stock'（日线+分钟线）或 'index'（仅日线 index_daily）
+
+    Returns:
+        dict: {"daily": {start,end,count}, "minute": {start,end,count}|None}
+    """
+    if market == "index":
+        db_code = _INDEX_CODE_TO_DB.get(code, code)
+        return {"daily": _coverage_for_table("index_daily", db_code), "minute": None}
+    return {
+        "daily": _coverage_for_table("daily_1day", code),
+        "minute": _coverage_for_table("daily_1min", code),
+    }
+
+
 def get_stock_list_in_main_board() -> list:
     """
     获取沪深A股主板成分股

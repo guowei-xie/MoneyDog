@@ -24,7 +24,12 @@ from utils.backtest_config import (
     get_config_path,
     set_backtest_config_override,
 )
-from utils.data import get_daily_bars
+from utils.data import (
+    get_daily_bars,
+    get_data_coverage,
+    get_stock_list_in_sector,
+    has_index_1day_data,
+)
 from utils.logger import error, info
 from laboratory.analyze import (
     analyze_account_changes,
@@ -1125,6 +1130,78 @@ async def get_market_bars(
         error(f"获取行情失败 code={code}: {exc}")
         raise HTTPException(status_code=500, detail="获取行情数据失败") from exc
     return JSONResponse({"code": code, "period": period, "bars": _bars_to_json(bars.get(code), period)})
+
+
+# 全市场股票代码缓存（首次查询后复用，避免每次扫描 stock_list 表）
+_STOCK_CODES_CACHE: List[str] = []
+# 候选指数（代码 -> 中文名），实际是否可用由 has_index_1day_data 校验
+_INDEX_CANDIDATES = {
+    "000001.SH": "上证指数",
+    "000300.SH": "沪深300",
+    "000905.SH": "中证500",
+    "000852.SH": "中证1000",
+    "399001.SZ": "深证成指",
+    "399006.SZ": "创业板指",
+}
+
+
+@app.get("/api/market/stocks")
+async def list_market_stocks(q: str = "", limit: int = 50) -> JSONResponse:
+    """
+    列出可浏览的股票代码（支持前缀/子串过滤）。stock_list 仅有代码、无名称。
+
+    Args:
+        q: 代码过滤关键字（子串匹配）
+        limit: 返回上限，默认 50
+
+    Returns:
+        JSONResponse: {"stocks": [{"code": ...}, ...], "total": 匹配总数}
+    """
+    global _STOCK_CODES_CACHE  # noqa: PLW0603
+    if not _STOCK_CODES_CACHE:
+        try:
+            _STOCK_CODES_CACHE = get_stock_list_in_sector("")
+        except Exception as exc:  # noqa: BLE001
+            error(f"获取股票列表失败: {exc}")
+            raise HTTPException(status_code=500, detail="获取股票列表失败") from exc
+    kw = q.strip().upper()
+    matched = [c for c in _STOCK_CODES_CACHE if kw in c.upper()] if kw else _STOCK_CODES_CACHE
+    return JSONResponse({"stocks": [{"code": c} for c in matched[:limit]], "total": len(matched)})
+
+
+@app.get("/api/market/indices")
+async def list_market_indices() -> JSONResponse:
+    """
+    列出数据库中可用的指数（在候选集中且 index_daily 有数据）。
+
+    Returns:
+        JSONResponse: {"indices": [{"code": ..., "name": ...}, ...]}
+    """
+    indices = [
+        {"code": code, "name": name}
+        for code, name in _INDEX_CANDIDATES.items()
+        if has_index_1day_data(code)
+    ]
+    return JSONResponse({"indices": indices})
+
+
+@app.get("/api/market/coverage")
+async def get_market_coverage(code: str, market: str = "stock") -> JSONResponse:
+    """
+    获取指定代码的数据覆盖（起止日期、条数），供行情浏览展示。
+
+    Args:
+        code: 代码
+        market: 'stock' 或 'index'
+
+    Returns:
+        JSONResponse: {"daily": {start,end,count}, "minute": {start,end,count}|null}
+    """
+    try:
+        return JSONResponse(get_data_coverage(code, market=market))
+    except Exception as exc:  # noqa: BLE001
+        error(f"获取数据覆盖失败 code={code}: {exc}")
+        raise HTTPException(status_code=500, detail="获取数据覆盖失败") from exc
 
 
 # dist 未构建时的兜底提示页（保证纯 Python 环境也能启动并给出指引）
