@@ -21,7 +21,12 @@ from fastapi.templating import Jinja2Templates
 
 from main import load_strategy
 from utils.logger import error, info
-from laboratory.analyze import analyze_account_changes, summarize_trades, format_trade_summary
+from laboratory.analyze import (
+    analyze_account_changes,
+    summarize_trades,
+    format_trade_summary,
+    fmt_metric,
+)
 from app import ConfigApp
 from web.schemas import (
     BacktestConfig,
@@ -205,15 +210,6 @@ def _build_account_summary(metrics: Dict[str, Any]) -> List[str]:
         return []
     lines: List[str] = []
 
-    # 仅在 key in metrics 时调用；值为 None/NaN 表示已计算但无法定义
-    def _pct(key: str) -> str:
-        v = metrics.get(key)
-        return f"{v * 100:.2f}%" if v is not None and pd.notnull(v) else "无法计算"
-
-    def _num(key: str, nd: int = 4) -> str:
-        v = metrics.get(key)
-        return f"{v:.{nd}f}" if v is not None and pd.notnull(v) else "无法计算"
-
     init_assets = metrics.get("init_assets")
     final_assets = metrics.get("final_assets")
     max_stock_count = metrics.get("max_stock_count")
@@ -225,26 +221,24 @@ def _build_account_summary(metrics: Dict[str, Any]) -> List[str]:
         lines.append(f"初始资金: {init_assets:,.2f} 元")
     if final_assets is not None:
         lines.append(f"最终资金: {final_assets:,.2f} 元")
-    # (显示名, metrics 键, 格式化器)；键不存在则跳过，兼容旧指标字典
-    for label, key, fmt in (
-        ("盈利率", "profit_rate", _pct),
-        ("年化收益率", "annual_return", _pct),
-        ("最大回撤", "max_drawdown", _pct),
-        ("年化波动率", "annual_volatility", _pct),
-        ("夏普比率(年化)", "sharpe_ratio", _num),
-        ("索提诺比率(年化)", "sortino_ratio", _num),
-        ("卡玛比率", "calmar_ratio", _num),
-        ("超额年化收益(相对上证)", "excess_return", _pct),
-        ("Beta(相对上证)", "beta", _num),
-        ("Alpha(年化,相对上证)", "alpha", _pct),
-        ("最大涨幅", "max_profit_rate", _pct),
-        ("最大跌幅", "max_loss_rate", _pct),
-        ("最大仓位资金占用率", "max_position_rate", _pct),
+    # (显示名, metrics 键, 是否百分比)；键不存在则跳过，兼容旧指标字典。格式化复用 analyze.fmt_metric，与日志口径一致
+    for label, key, pct in (
+        ("盈利率", "profit_rate", True),
+        ("年化收益率", "annual_return", True),
+        ("最大回撤", "max_drawdown", True),
+        ("年化波动率", "annual_volatility", True),
+        ("夏普比率(年化)", "sharpe_ratio", False),
+        ("索提诺比率(年化)", "sortino_ratio", False),
+        ("卡玛比率", "calmar_ratio", False),
+        ("超额年化收益(相对上证)", "excess_return", True),
+        ("Beta(相对上证)", "beta", False),
+        ("Alpha(年化,相对上证)", "alpha", True),
+        ("最大涨幅", "max_profit_rate", True),
+        ("最大跌幅", "max_loss_rate", True),
+        ("最大仓位资金占用率", "max_position_rate", True),
     ):
         if key in metrics:
-            text = fmt(key)
-            if text is not None:
-                lines.append(f"{label}: {text}")
+            lines.append(f"{label}: {fmt_metric(metrics.get(key), pct=pct)}")
     if max_stock_count is not None:
         lines.append(f"最大持仓股票数: {max_stock_count}")
     if empty_days is not None:
@@ -277,9 +271,9 @@ def _build_stock_summary_from_file(path: str) -> List[str]:
     # 复用 analyze.py 的交易级汇总，保证前端与回测日志口径一致（净收益、盈亏比除零保护等）
     lines: List[str] = []
     if "是否平仓" in df.columns:
-        closed = df[df["是否平仓"] == True]  # noqa: E712
-        lines += format_trade_summary(summarize_trades(closed), title="个股分析结果（已平仓·净收益口径）")
-        if (~(df["是否平仓"] == True)).any():  # noqa: E712
+        is_closed = df["是否平仓"].astype(bool)  # Excel 回读可能为 object，统一为 bool
+        lines += format_trade_summary(summarize_trades(df[is_closed]), title="个股分析结果（已平仓·净收益口径）")
+        if (~is_closed).any():
             lines += format_trade_summary(summarize_trades(df), title="个股分析结果（含未平仓·期末市值）")
     else:
         # 兼容旧版 Excel（无 是否平仓 列）

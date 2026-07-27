@@ -2,8 +2,6 @@
 分析工具库
 """
 
-import os
-import configparser
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -21,23 +19,20 @@ plt.rcParams["axes.unicode_minus"] = False
 from utils.util import time_str_to_datetime, get_date_interval, get_trade_days_interval
 from utils.logger import info
 from utils.data import get_trade_calendar, get_daily_bars
+from utils.backtest_config import get_metrics_params, get_backtest_end_time
 
 # 账户变动分析必要列
 REQ_COLS_ACCOUNT = ["trade_date", "total_assets", "stock_count", "stock_value"]
 
 
-def _load_metrics_params() -> tuple:
+def fmt_metric(v, pct: bool = False, nd: int = 4) -> str:
     """
-    从 config.ini [BACKTEST] 读取评价指标参数，供夏普/年化/Sortino 等计算使用。
-    Returns:
-        tuple: (risk_free_rate 年化无风险利率-小数, trading_days_per_year 年化交易日数)
+    统一格式化评价指标：None/NaN → '无法计算'，否则按百分比或定点小数渲染。
+    供日志（analyze）与 Web 摘要（server）共用，避免两处格式化口径漂移。
     """
-    cfg = configparser.ConfigParser()
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cfg.read(os.path.join(project_root, "config.ini"), encoding="utf-8")
-    risk_free_rate = cfg.getfloat("BACKTEST", "risk_free_rate", fallback=0.0)
-    trading_days = cfg.getint("BACKTEST", "trading_days_per_year", fallback=252)
-    return risk_free_rate, trading_days
+    if v is None or not pd.notnull(v):
+        return "无法计算"
+    return f"{v * 100:.2f}%" if pct else f"{v:.{nd}f}"
 
 
 def summarize_trades(df: pd.DataFrame, rate_col: str = "涨跌幅") -> dict:
@@ -62,7 +57,7 @@ def summarize_trades(df: pd.DataFrame, rate_col: str = "涨跌幅") -> dict:
     profit_loss_ratio = (-avg_profit / avg_loss) if avg_loss != 0 else None
     summary = {
         "total_trades": total,
-        "win_rate": win_mask.sum() / total * 100 if total else 0.0,
+        "win_rate": win_mask.sum() / total * 100,
         "avg_change": rates.mean() * 100,
         "max_change": rates.max() * 100,
         "min_change": rates.min() * 100,
@@ -238,6 +233,7 @@ def plot_account_profit_curve(
     initial_assets: float,
     save_path: str = None,
     transactions_df: pd.DataFrame = None,
+    index_profit_rates=None,
 ) -> str:
     """
     绘制账户分析图：上为账户累计盈利率曲线，中为持仓比例折线图；若有交易记录则下为按买入日的个股盈利率散点及中位数折线。
@@ -246,6 +242,7 @@ def plot_account_profit_curve(
         initial_assets: 初始资金
         save_path: 图片保存路径，为空则自动生成到 results/ 下
         transactions_df: 可选，建仓/清仓分析结果，需含 建仓时间、涨跌幅；传入且非空时绘制第三图
+        index_profit_rates: 可选，预先算好的指数累计盈利率数组；传入则复用，避免重复查询指数日线
     Returns:
         str: 实际保存的文件路径，未保存则返回空字符串
     """
@@ -314,8 +311,9 @@ def plot_account_profit_curve(
         ax.grid(True, alpha=0.3)
         ax.tick_params(axis="both", labelsize=9)
 
-    # 图1：账户累计盈利率曲线，叠加指数盈利率曲线（相对首日）
-    index_profit_rates = _compute_index_profit_rates(df)
+    # 图1：账户累计盈利率曲线，叠加指数盈利率曲线（相对首日）；调用方可传入以复用，避免重复查询
+    if index_profit_rates is None:
+        index_profit_rates = _compute_index_profit_rates(df)
     ax1.plot(days, profit_rates, color=_C_ACCOUNT, linestyle=_LS_SOLID, linewidth=1.5, label="账户累计盈利率")
     if index_profit_rates is not None:
         ax1.plot(
@@ -415,37 +413,33 @@ def analyze_account_changes(
         info("初始资金为0")
         return pd.DataFrame()
 
-    risk_free_rate, trading_days = _load_metrics_params()
+    risk_free_rate, trading_days = get_metrics_params()
     rf_daily = risk_free_rate / trading_days  # 日度无风险利率（简单折算）
+    ann_factor = np.sqrt(trading_days)        # 年化因子
 
     profit_rate = final / initial - 1
-    max_profit_rate = (df['total_assets'].cummax() / initial - 1).max()
-    max_loss_rate = (df['total_assets'].cummin() / initial - 1).min()
     roll_max = df['total_assets'].cummax()
     max_drawdown = (df['total_assets'] / roll_max - 1).min()
+    max_profit_rate = df['total_assets'].max() / initial - 1  # 账户历史峰值相对初始的涨幅
+    max_loss_rate = df['total_assets'].min() / initial - 1    # 账户历史谷值相对初始的跌幅
 
     daily_returns = df['total_assets'].pct_change().dropna()
     n = len(daily_returns)              # 有效收益样本天数
     std = daily_returns.std(ddof=1) if n > 1 else np.nan
+    mean_ret = daily_returns.mean() if n > 0 else np.nan
 
     # 年化收益率（几何年化，按有效交易日样本）
     annual_return = (final / initial) ** (trading_days / n) - 1 if n > 0 and final > 0 else np.nan
+    ar_ok = pd.notnull(annual_return)
     # 年化波动率
-    annual_volatility = std * np.sqrt(trading_days) if pd.notnull(std) and std > 0 else np.nan
+    annual_volatility = std * ann_factor if pd.notnull(std) and std > 0 else np.nan
     # 夏普比率：用配置的无风险利率与年化天数，样本标准差 ddof=1
-    if pd.notnull(std) and std > 0:
-        sharpe_ratio = (daily_returns.mean() - rf_daily) / std * np.sqrt(trading_days)
-    else:
-        sharpe_ratio = np.nan
+    sharpe_ratio = (mean_ret - rf_daily) / std * ann_factor if pd.notnull(std) and std > 0 else np.nan
     # 索提诺比率：仅以低于无风险日收益的下行波动为分母
-    downside = daily_returns[daily_returns < rf_daily]
-    downside_std = downside.std(ddof=1) if len(downside) > 1 else np.nan
-    if pd.notnull(downside_std) and downside_std > 0:
-        sortino_ratio = (daily_returns.mean() - rf_daily) / downside_std * np.sqrt(trading_days)
-    else:
-        sortino_ratio = np.nan
+    downside_std = daily_returns[daily_returns < rf_daily].std(ddof=1)
+    sortino_ratio = (mean_ret - rf_daily) / downside_std * ann_factor if pd.notnull(downside_std) and downside_std > 0 else np.nan
     # 卡玛比率：年化收益 / 最大回撤绝对值
-    calmar_ratio = annual_return / abs(max_drawdown) if pd.notnull(annual_return) and max_drawdown < 0 else np.nan
+    calmar_ratio = annual_return / abs(max_drawdown) if ar_ok and max_drawdown < 0 else np.nan
 
     # 基准（上证指数）相对指标：超额收益、beta、alpha（CAPM 年化）
     excess_return = beta = alpha = np.nan
@@ -456,51 +450,47 @@ def analyze_account_changes(
         strat_daily = daily_returns.reset_index(drop=True)
         m = min(len(bench_daily), len(strat_daily))
         bench_daily, strat_daily = bench_daily.iloc[:m], strat_daily.iloc[:m]
-        if idx_value[0] > 0:
+        if idx_value[0] > 0 and ar_ok:
             bench_annual = (idx_value[-1] / idx_value[0]) ** (trading_days / n) - 1
-            excess_return = annual_return - bench_annual if pd.notnull(annual_return) else np.nan
+            excess_return = annual_return - bench_annual
             var_b = bench_daily.var(ddof=1)
             if var_b and var_b > 0:
                 beta = strat_daily.cov(bench_daily) / var_b
-                if pd.notnull(annual_return):
-                    alpha = annual_return - (risk_free_rate + beta * (bench_annual - risk_free_rate))
+                alpha = annual_return - (risk_free_rate + beta * (bench_annual - risk_free_rate))
 
     max_stock_count = df['stock_count'].max()
     safe_total_assets = df['total_assets'].replace(0, pd.NA)
     max_position_rate = (df['stock_value'] / safe_total_assets).max()
     empty_days = (df['stock_count'] == 0).sum()
 
-    def _fmt(v, pct=False, nd=4):
-        if not pd.notnull(v):
-            return "无法计算"
-        return f"{v*100:.2f}%" if pct else f"{v:.{nd}f}"
-
     info("=" * 100)
     info("账户分析结果:")
     info(f"初始资金: {initial:,.2f} 元")
     info(f"最终资金: {final:,.2f} 元")
     info(f"盈利率: {profit_rate*100:.2f}%")
-    info(f"年化收益率: {_fmt(annual_return, pct=True)}")
+    info(f"年化收益率: {fmt_metric(annual_return, pct=True)}")
     info(f"最大回撤: {max_drawdown*100:.2f}%")
-    info(f"年化波动率: {_fmt(annual_volatility, pct=True)}")
-    info(f"夏普比率(年化): {_fmt(sharpe_ratio)}")
-    info(f"索提诺比率(年化): {_fmt(sortino_ratio)}")
-    info(f"卡玛比率: {_fmt(calmar_ratio)}")
-    info(f"超额年化收益(相对上证): {_fmt(excess_return, pct=True)}")
-    info(f"Beta(相对上证): {_fmt(beta)}")
-    info(f"Alpha(年化,相对上证): {_fmt(alpha, pct=True)}")
+    info(f"年化波动率: {fmt_metric(annual_volatility, pct=True)}")
+    info(f"夏普比率(年化): {fmt_metric(sharpe_ratio)}")
+    info(f"索提诺比率(年化): {fmt_metric(sortino_ratio)}")
+    info(f"卡玛比率: {fmt_metric(calmar_ratio)}")
+    info(f"超额年化收益(相对上证): {fmt_metric(excess_return, pct=True)}")
+    info(f"Beta(相对上证): {fmt_metric(beta)}")
+    info(f"Alpha(年化,相对上证): {fmt_metric(alpha, pct=True)}")
     info(f"最大涨幅: {max_profit_rate*100:.2f}%")
     info(f"最大跌幅: {max_loss_rate*100:.2f}%")
     info(f"最大持仓股票数: {max_stock_count}")
-    info(f"最大仓位资金占用率: {max_position_rate*100:.2f}%" if pd.notnull(max_position_rate) else "最大仓位资金占用率: 无法计算")
+    info(f"最大仓位资金占用率: {fmt_metric(max_position_rate, pct=True)}")
     info(f"空仓天数: {empty_days}")
     info(f"有效收益样本天数: {n}")
     if 0 < n < 60:
         info(f"提示：样本交易日数偏少（n={n}），年化夏普/收益/波动率为外推结果，仅供参考")
 
-    # 绘制账户曲线（含可选第三图：按买入日个股盈利率散点+中位数折线）
+    # 绘制账户曲线（复用已算的指数曲线，避免重复查询指数日线）
     if save_curve:
-        curve_path = plot_account_profit_curve(df, initial, transactions_df=transactions_df)
+        curve_path = plot_account_profit_curve(
+            df, initial, transactions_df=transactions_df, index_profit_rates=index_profit_rates
+        )
         if curve_path:
             info(f"账户盈利率曲线已保存: {curve_path}")
 
@@ -549,13 +539,7 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
     start_time = str(df['time'].min())[:8]
     end_time = str(df['time'].max())[:8]
     # 期末仍持仓的交易需按回测截止日估值，交易日历延伸到 config 的回测结束日，保证估值日期落在日历内
-    _cfg = configparser.ConfigParser()
-    _cfg.read(
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.ini"),
-        encoding="utf-8",
-    )
-    backtest_end = _cfg.get("BACKTEST", "backtest_end_time", fallback=end_time)
-    calendar_end = max(end_time, backtest_end)
+    calendar_end = max(end_time, get_backtest_end_time(fallback=end_time))
     trade_calendar = get_trade_calendar(start_time=start_time, end_time=calendar_end)
 
     df = df.sort_values(["stock_code", "time"])
@@ -618,10 +602,7 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
                 # 综合退出价 = (已卖出成交额 + 剩余股数按期末收盘估值) / 建仓总股数
                 cp = (sell_proceeds + remaining * last_close) / buy_shares if buy_shares else 0
                 close_date8 = last_date8
-                close_time_disp = (
-                    pd.to_datetime(last_date8, format="%Y%m%d").strftime("%Y-%m-%d")
-                    + " 15:00:00 (未平仓·期末估值)"
-                )
+                close_time_disp = time_str_to_datetime(f"{last_date8}150000") + " (未平仓·期末估值)"
                 unclosed_marked += 1
 
             hold_days = _safe_hold_days(close_date8, str(build_t)[:8], trade_calendar)
@@ -727,8 +708,8 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
                 f"期末未平仓交易：按期末市值计入 {unclosed_marked} 笔，"
                 f"因取不到估值价丢弃 {unclosed_dropped} 笔"
             )
-        # 已平仓口径（评价主口径），净收益列
-        closed = result[result["是否平仓"] == True]  # noqa: E712
+        # 已平仓口径（评价主口径），净收益列（是否平仓 为原生 bool 列，可直接布尔索引）
+        closed = result[result["是否平仓"]]
         info("=" * 100)
         for line in format_trade_summary(summarize_trades(closed), title="个股分析结果（已平仓·净收益口径）"):
             info(line)
