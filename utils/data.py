@@ -1,8 +1,9 @@
 """
 数据工具模块
 提供数据处理和获取功能
-适配新库 moneydog.duckdb：表 stock_1day_bars / stock_1m_bars / index_1day_bars，
-时间戳为秒级，无 stock_list 表，指数 code 无后缀（如 000001）。
+适配数据源 stock.duckdb：表 daily_1day / daily_1min / index_daily / stock_list，
+时间列 time 为毫秒级时间戳（对外统一转为秒级 timestamp），指数 code 带后缀（如 000001.SH），
+无 trade_calendar 表（交易日历由 daily_1day 的交易日期派生）。
 """
 import pandas as pd
 from utils.logger import debug, error
@@ -12,27 +13,23 @@ from utils.util import date_to_timestamp
 
 duckdb_helper = DuckDBHelper()
 
-# 新库表名映射（对外仍可用旧表名语义，如 index_daily）
+# 表名映射：对外语义名 -> 库内真实表名（stock.duckdb 库内表名与语义名一致）
 _TABLE_MAP = {
-    "daily_1day": "stock_1day_bars",
-    "daily_1min": "stock_1m_bars",
-    "index_daily": "index_1day_bars",
+    "daily_1day": "daily_1day",
+    "daily_1min": "daily_1min",
+    "index_daily": "index_daily",
 }
 
-# 指数 code 映射：策略常用 000001.SH，新库为 000001
-_INDEX_CODE_TO_DB = {
-    "000001.SH": "000001",
-    # 中证1000（常见代码：000852.SH；库内通常无后缀）
-    "000852.SH": "000852",
-}
+# 指数 code 映射：本库指数 code 已带后缀（如 000001.SH / 000852.SH），无需转换
+_INDEX_CODE_TO_DB = {}
 
 
 def has_index_1day_data(index_code: str) -> bool:
     """
-    检查数据库中是否存在指定指数的日线行情数据（index_1day_bars）。
+    检查数据库中是否存在指定指数的日线行情数据（index_daily）。
 
     Args:
-        index_code: 指数代码，支持带后缀（如 '000852.SH'）或库内代码（如 '000852'）
+        index_code: 指数代码，带后缀（如 '000852.SH'）
 
     Returns:
         bool: 存在返回 True，否则 False
@@ -41,7 +38,7 @@ def has_index_1day_data(index_code: str) -> bool:
         return False
     db_code = _INDEX_CODE_TO_DB.get(index_code, index_code)
     try:
-        sql = 'SELECT 1 AS ok FROM "index_1day_bars" WHERE code = ? LIMIT 1'
+        sql = 'SELECT 1 AS ok FROM "index_daily" WHERE code = ? LIMIT 1'
         df = duckdb_helper.conn.execute(sql, [db_code]).df()
         return not df.empty
     except Exception as e:
@@ -51,32 +48,34 @@ def has_index_1day_data(index_code: str) -> bool:
 
 def get_trade_calendar(start_time: str, end_time: str, format: str = "number") -> list:
     """
-    获取交易日历（从新库 trade_calendar 表读取，避免依赖 akshare）。
+    获取交易日历（本库无 trade_calendar 表，从 daily_1day 的交易日期去重派生，避免依赖 akshare）。
     Args:
         start_time: 开始时间，如 '20240101' 或 '2024-01-01'
         end_time: 结束时间
         format: 'number' 返回如 20240101，'str' 返回如 '2024-01-01'
     Returns:
-        list: 交易日历
+        list: 交易日历（升序，去重）
     """
     start = pd.to_datetime(start_time)
     end = pd.to_datetime(end_time)
-    start_str = start.strftime("%Y-%m-%d")
-    end_str = end.strftime("%Y-%m-%d")
+    start_ms = date_to_timestamp(start.strftime("%Y%m%d"))
+    end_ms = date_to_timestamp(end.strftime("%Y%m%d"), at_end_of_day=True)
     try:
-        sql = (
-            "SELECT trade_date FROM trade_calendar "
-            "WHERE trade_date >= ? AND trade_date <= ? ORDER BY trade_date"
-        )
-        df = duckdb_helper.conn.execute(sql, [start_str, end_str]).df()
+        # 日线中同一交易日所有股票共享同一 time（当日 0 点），DISTINCT 即得交易日集合
+        sql = "SELECT DISTINCT time FROM daily_1day WHERE time >= ? AND time <= ? ORDER BY time"
+        df = duckdb_helper.conn.execute(sql, [start_ms, end_ms]).df()
     except Exception as e:
-        error(f"从 trade_calendar 读取交易日历失败: {e}")
-        raise RuntimeError(f"从 trade_calendar 读取交易日历失败: {e}") from e
-    dates = pd.to_datetime(df["trade_date"])
+        error(f"从 daily_1day 派生交易日历失败: {e}")
+        raise RuntimeError(f"从 daily_1day 派生交易日历失败: {e}") from e
+    if df.empty:
+        return []
+    # 毫秒时间戳按上海时区还原交易日期（与 get_daily_bars 的日期口径一致）
+    sh_dates = pd.to_datetime(df["time"], unit="ms", utc=True).dt.tz_convert("Asia/Shanghai")
+    dates = sorted(set(sh_dates.dt.strftime("%Y%m%d")))
     if format == "number":
-        return [d.strftime("%Y%m%d") for d in dates]
+        return dates
     if format == "str":
-        return [d.strftime("%Y-%m-%d") for d in dates]
+        return [f"{d[:4]}-{d[4:6]}-{d[6:]}" for d in dates]
     error(f"无效的格式: {format}")
     raise ValueError(f"无效的格式: {format}")
 
@@ -91,14 +90,14 @@ def _is_standard_stock_code(code: str) -> bool:
 
 def get_stock_list_in_sector(sector_name: str) -> list:
     """
-    获取板块成分股。新库无板块表，返回全市场股票代码（从 stock_1day_bars 去重，仅标准代码）。
+    获取板块成分股。本库无板块表，返回全市场股票代码（从 stock_list 表取，仅标准代码）。
     Args:
         sector_name: 板块名称(如: '沪深A股')，当前未使用，保留接口兼容
     Returns:
         list: 股票代码列表
     """
     try:
-        sql = "SELECT DISTINCT code FROM stock_1day_bars ORDER BY code"
+        sql = "SELECT DISTINCT code FROM stock_list ORDER BY code"
         df = duckdb_helper.conn.execute(sql).df()
         codes = df["code"].values.tolist()
         return [c for c in codes if _is_standard_stock_code(c)]
@@ -155,11 +154,11 @@ def get_daily_bars(
         raise ValueError(f"不支持的周期: {period}")
 
     raw_table = _TABLE_MAP.get(table_name, table_name)
-    is_index = raw_table == "index_1day_bars"
+    is_index = raw_table == "index_daily"
 
-    # 新库为秒级时间戳；与 date_to_timestamp（毫秒）统一为秒
-    start_ts = (date_to_timestamp(start_time) // 1000) if start_time else None
-    end_ts = (date_to_timestamp(end_time, at_end_of_day=True) // 1000) if end_time else None
+    # 本库 time 列为毫秒级时间戳；date_to_timestamp 亦返回毫秒，直接按毫秒过滤
+    start_ts = date_to_timestamp(start_time) if start_time else None
+    end_ts = date_to_timestamp(end_time, at_end_of_day=True) if end_time else None
 
     # 指数表 code 无后缀，做请求 code -> 库 code 映射
     if is_index:
@@ -170,14 +169,15 @@ def get_daily_bars(
         code_to_request = {c: c for c in stock_list}
 
     code_list_str = ",".join([f"'{c}'" for c in db_codes])
-    fields = "code, timestamp, open, high, low, close, volume, amount"
+    # 库内 time 为毫秒；对外统一输出秒级 timestamp（time // 1000）
+    fields = "code, time // 1000 AS timestamp, open, high, low, close, volume, amount"
     where_clause = [f"code IN ({code_list_str})"]
     if start_ts is not None:
-        where_clause.append(f"timestamp >= {start_ts}")
+        where_clause.append(f"time >= {start_ts}")
     if end_ts is not None:
-        where_clause.append(f"timestamp <= {end_ts}")
+        where_clause.append(f"time <= {end_ts}")
     where_sql = " AND ".join(where_clause)
-    sql = f"SELECT {fields} FROM \"{raw_table}\" WHERE {where_sql} ORDER BY code, timestamp"
+    sql = f"SELECT {fields} FROM \"{raw_table}\" WHERE {where_sql} ORDER BY code, time"
     df_all = duckdb_helper.conn.execute(sql).df()
 
     if df_all.empty:

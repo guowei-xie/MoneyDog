@@ -37,13 +37,13 @@ class DuckDBHelper:
 
     def get_stock_list_in_sector(self, sector_name):
         """
-        获取板块成分股。新库无板块表，从 stock_1day_bars 去重返回全部股票代码。
+        获取板块成分股。本库从 stock_list 表返回全部股票代码。
         Args:
             sector_name: 板块名称(如: '沪深A股')，当前未使用，保留接口兼容
         Returns:
             list: 股票代码列表
         """
-        sql = "SELECT DISTINCT code FROM stock_1day_bars ORDER BY code"
+        sql = "SELECT DISTINCT code FROM stock_list ORDER BY code"
         df = self.conn.execute(sql).df()
         return df["code"].values.tolist()
 

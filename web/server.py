@@ -21,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from main import load_strategy
 from utils.logger import error, info
-from laboratory.analyze import analyze_account_changes
+from laboratory.analyze import analyze_account_changes, summarize_trades, format_trade_summary
 from app import ConfigApp
 from web.schemas import (
     BacktestConfig,
@@ -179,15 +179,15 @@ def _extract_metrics_from_df(df: pd.DataFrame) -> Dict[str, Any]:
     if df is None or df.empty:
         return {}
     row = df.iloc[0].to_dict()
-    # 确保 JSON 可序列化（将 numpy 类型转为 Python 原生类型）
+    # 确保 JSON 可序列化（numpy 类型转原生类型；NaN 统一转 None 以产出合法 JSON）
     result: Dict[str, Any] = {}
     for key, value in row.items():
         if isinstance(value, (pd.Timestamp, datetime)):
             result[key] = value.isoformat()
-        elif hasattr(value, "item"):
-            result[key] = value.item()
-        else:
-            result[key] = value
+            continue
+        if hasattr(value, "item"):
+            value = value.item()
+        result[key] = None if isinstance(value, float) and pd.isna(value) else value
     return result
 
 
@@ -204,44 +204,53 @@ def _build_account_summary(metrics: Dict[str, Any]) -> List[str]:
     if not metrics:
         return []
     lines: List[str] = []
+
+    # 仅在 key in metrics 时调用；值为 None/NaN 表示已计算但无法定义
+    def _pct(key: str) -> str:
+        v = metrics.get(key)
+        return f"{v * 100:.2f}%" if v is not None and pd.notnull(v) else "无法计算"
+
+    def _num(key: str, nd: int = 4) -> str:
+        v = metrics.get(key)
+        return f"{v:.{nd}f}" if v is not None and pd.notnull(v) else "无法计算"
+
     init_assets = metrics.get("init_assets")
     final_assets = metrics.get("final_assets")
-    profit_rate = metrics.get("profit_rate")
-    max_drawdown = metrics.get("max_drawdown")
-    sharpe_ratio = metrics.get("sharpe_ratio")
-    max_profit_rate = metrics.get("max_profit_rate")
-    max_loss_rate = metrics.get("max_loss_rate")
     max_stock_count = metrics.get("max_stock_count")
-    max_position_rate = metrics.get("max_position_rate")
     empty_days = metrics.get("empty_days")
+    sample_days = metrics.get("sample_days")
 
     lines.append("账户分析结果")
     if init_assets is not None:
         lines.append(f"初始资金: {init_assets:,.2f} 元")
     if final_assets is not None:
         lines.append(f"最终资金: {final_assets:,.2f} 元")
-    if profit_rate is not None:
-        lines.append(f"盈利率: {profit_rate * 100:.2f}%")
-    if max_drawdown is not None:
-        lines.append(f"最大回撤: {max_drawdown * 100:.2f}%")
-    if sharpe_ratio is not None:
-        if pd.notnull(sharpe_ratio):
-            lines.append(f"夏普比率(年化): {sharpe_ratio:.4f}")
-        else:
-            lines.append("夏普比率(年化): 无法计算")
-    if max_profit_rate is not None:
-        lines.append(f"最大涨幅: {max_profit_rate * 100:.2f}%")
-    if max_loss_rate is not None:
-        lines.append(f"最大跌幅: {max_loss_rate * 100:.2f}%")
+    # (显示名, metrics 键, 格式化器)；键不存在则跳过，兼容旧指标字典
+    for label, key, fmt in (
+        ("盈利率", "profit_rate", _pct),
+        ("年化收益率", "annual_return", _pct),
+        ("最大回撤", "max_drawdown", _pct),
+        ("年化波动率", "annual_volatility", _pct),
+        ("夏普比率(年化)", "sharpe_ratio", _num),
+        ("索提诺比率(年化)", "sortino_ratio", _num),
+        ("卡玛比率", "calmar_ratio", _num),
+        ("超额年化收益(相对上证)", "excess_return", _pct),
+        ("Beta(相对上证)", "beta", _num),
+        ("Alpha(年化,相对上证)", "alpha", _pct),
+        ("最大涨幅", "max_profit_rate", _pct),
+        ("最大跌幅", "max_loss_rate", _pct),
+        ("最大仓位资金占用率", "max_position_rate", _pct),
+    ):
+        if key in metrics:
+            text = fmt(key)
+            if text is not None:
+                lines.append(f"{label}: {text}")
     if max_stock_count is not None:
         lines.append(f"最大持仓股票数: {max_stock_count}")
-    if max_position_rate is not None:
-        if pd.notnull(max_position_rate):
-            lines.append(f"最大仓位资金占用率: {max_position_rate * 100:.2f}%")
-        else:
-            lines.append("最大仓位资金占用率: 无法计算")
     if empty_days is not None:
         lines.append(f"空仓天数: {empty_days}")
+    if sample_days is not None:
+        lines.append(f"有效收益样本天数: {sample_days}")
     return lines
 
 
@@ -265,48 +274,16 @@ def _build_stock_summary_from_file(path: str) -> List[str]:
     if df is None or df.empty or "涨跌幅" not in df.columns:
         return []
 
+    # 复用 analyze.py 的交易级汇总，保证前端与回测日志口径一致（净收益、盈亏比除零保护等）
     lines: List[str] = []
-    lines.append("个股分析结果")
-    total_trades = len(df)
-    lines.append(f"总交易次数: {total_trades}")
-
-    win_mask = df["涨跌幅"] > 0
-    loss_mask = df["涨跌幅"] < 0
-    win_count = df[win_mask].shape[0]
-    win_rate = (win_count / total_trades * 100.0) if total_trades > 0 else 0.0
-    lines.append(f"胜率: {win_rate:.2f}%")
-
-    avg_change = df["涨跌幅"].mean() * 100.0
-    max_change = df["涨跌幅"].max() * 100.0
-    min_change = df["涨跌幅"].min() * 100.0
-    lines.append(f"平均涨跌幅: {avg_change:.2f}%")
-    lines.append(f"最大涨跌幅: {max_change:.2f}%")
-    lines.append(f"最小涨跌幅: {min_change:.2f}%")
-
-    avg_profit_rate = df[win_mask]["涨跌幅"].mean() * 100.0 if win_mask.any() else 0.0
-    avg_loss_rate = df[loss_mask]["涨跌幅"].mean() * 100.0 if loss_mask.any() else 0.0
-    profit_loss_ratio = (avg_profit_rate / avg_loss_rate) if avg_loss_rate != 0 else 0.0
-    total_sum = df["涨跌幅"].sum() * 100.0
-    lines.append(f"盈亏和: {total_sum:.2f}%")
-    if avg_loss_rate != 0:
-        lines.append(
-            f"盈亏比：平均涨幅{avg_profit_rate:.2f}%，平均跌幅{avg_loss_rate:.2f}%，盈亏比{-profit_loss_ratio:.2f}",
-        )
-
-    if "持仓天数" in df.columns:
-        avg_hold_days = df["持仓天数"].mean()
-        lines.append(f"平均持仓天数: {avg_hold_days:.2f}")
-
-    if "总手续费" in df.columns:
-        total_commission = df["总手续费"].sum()
-        lines.append(f"总交易手续费: {total_commission:,.2f} 元")
-    if "总印花税" in df.columns:
-        total_tax = df["总印花税"].sum()
-        lines.append(f"总交易印花税: {total_tax:,.2f} 元")
-    if "总成本" in df.columns:
-        total_costs = df["总成本"].sum()
-        lines.append(f"总交易成本: {total_costs:,.2f} 元")
-
+    if "是否平仓" in df.columns:
+        closed = df[df["是否平仓"] == True]  # noqa: E712
+        lines += format_trade_summary(summarize_trades(closed), title="个股分析结果（已平仓·净收益口径）")
+        if (~(df["是否平仓"] == True)).any():  # noqa: E712
+            lines += format_trade_summary(summarize_trades(df), title="个股分析结果（含未平仓·期末市值）")
+    else:
+        # 兼容旧版 Excel（无 是否平仓 列）
+        lines += format_trade_summary(summarize_trades(df))
     return lines
 
 
