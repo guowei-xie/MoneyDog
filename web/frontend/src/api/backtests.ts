@@ -1,6 +1,7 @@
 import client from './client'
 import type {
   AppConfig,
+  CurveSeries,
   RunBacktestRequest,
   RunRecord,
   RunStatus,
@@ -50,6 +51,11 @@ export async function deleteBacktest(runId: string): Promise<{ success: boolean;
 
 export async function getMetrics(runId: string): Promise<MetricsDict> {
   const { data } = await client.get<MetricsDict>(`/backtests/${encodeURIComponent(runId)}/metrics`)
+  return data
+}
+
+export async function getCurve(runId: string): Promise<CurveSeries> {
+  const { data } = await client.get<CurveSeries>(`/backtests/${encodeURIComponent(runId)}/curve.json`)
   return data
 }
 

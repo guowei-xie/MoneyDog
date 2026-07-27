@@ -2,6 +2,7 @@
 分析工具库
 """
 
+import os
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -239,6 +240,76 @@ def _compute_index_profit_rates(
         return None
 
 
+def load_account_changes_df(file_path: str) -> pd.DataFrame:
+    """
+    加载账户变动明细 Excel 并做标准化（去空 trade_date、按 trade_date 升序）。
+
+    Args:
+        file_path: position_and_account_changes_*.xlsx 路径
+
+    Returns:
+        pd.DataFrame: 规范化后的账户变动表；文件缺失/字段不全时返回空 DataFrame
+    """
+    if not file_path or not os.path.exists(file_path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_excel(file_path)
+    except Exception as e:  # noqa: BLE001
+        info(f"无法加载账户变动文件: {e}")
+        return pd.DataFrame()
+    if df is None or df.empty or not all(col in df.columns for col in REQ_COLS_ACCOUNT):
+        return pd.DataFrame()
+    df = df[df["trade_date"].notna()].sort_values("trade_date").reset_index(drop=True)
+    return df
+
+
+def compute_account_series(
+    df: pd.DataFrame,
+    initial_assets: float,
+    include_benchmark: bool = False,
+) -> dict:
+    """
+    从账户变动表计算收益/回撤/仓位等时间序列（JSON 友好，PNG 与 Web 曲线共用，避免口径漂移）。
+
+    Args:
+        df: 含 trade_date、total_assets、stock_value 的账户变动表，已按 trade_date 升序
+        initial_assets: 初始资金（与 PNG 口径一致，通常取首日 total_assets）
+        include_benchmark: 是否附带上证指数基准累计收益（需查询 index_daily）
+
+    Returns:
+        dict: dates / equity_pct / drawdown_pct / position_ratio / total_assets /
+              initial_amount（include_benchmark=True 时附带 benchmark_pct，可能为 None）
+    """
+    total = df["total_assets"].astype(float)
+    equity_pct = (total / initial_assets - 1) * 100
+    roll_max = total.cummax()
+    drawdown_pct = (total / roll_max - 1) * 100
+    # 持仓比例 = 持仓价值 / 账户总金额，总金额<=0 时记为 0
+    safe_total = total.where(total > 0)
+    position_ratio = (df["stock_value"].astype(float) / safe_total).fillna(0.0)
+
+    def _round(series: pd.Series, ndigits: int) -> list:
+        return [round(float(v), ndigits) for v in series.tolist()]
+
+    dates = [_trade_date_to_yyyymmdd(t) for t in df["trade_date"]]
+    dates_iso = [f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(d) == 8 else d for d in dates]
+
+    result = {
+        "dates": dates_iso,
+        "equity_pct": _round(equity_pct, 4),
+        "drawdown_pct": _round(drawdown_pct, 4),
+        "position_ratio": _round(position_ratio, 6),
+        "total_assets": _round(total, 2),
+        "initial_amount": float(initial_assets),
+    }
+    if include_benchmark:
+        bench = _compute_index_profit_rates(df)
+        result["benchmark_pct"] = (
+            [round(float(v), 4) for v in bench] if bench is not None and len(bench) == len(df) else None
+        )
+    return result
+
+
 def plot_account_profit_curve(
     df: pd.DataFrame,
     initial_assets: float,
@@ -260,10 +331,10 @@ def plot_account_profit_curve(
     if df is None or df.empty or not initial_assets:
         return ""
     days = np.arange(1, len(df) + 1)
-    profit_rates = (df["total_assets"].values / initial_assets - 1) * 100
-    # 持仓比例 = 持仓价值 / 账户总金额，总金额为 0 时记为 0
-    safe_total = np.where(df["total_assets"].values > 0, df["total_assets"].values, np.nan)
-    position_ratio = np.where(np.isfinite(safe_total), df["stock_value"].values / safe_total, 0.0)
+    # 收益率与持仓比例与 Web 曲线共用同一口径，避免 PNG/JSON 漂移
+    series = compute_account_series(df, initial_assets)
+    profit_rates = np.asarray(series["equity_pct"], dtype=float)
+    position_ratio = np.asarray(series["position_ratio"], dtype=float)
 
     has_tx = (
         transactions_df is not None

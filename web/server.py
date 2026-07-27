@@ -27,6 +27,8 @@ from utils.backtest_config import (
 from utils.logger import error, info
 from laboratory.analyze import (
     analyze_account_changes,
+    compute_account_series,
+    load_account_changes_df,
     summarize_trades,
     format_trade_summary,
     fmt_metric,
@@ -759,6 +761,33 @@ async def get_backtest_metrics(run_id: str) -> JSONResponse:
     _save_run_index(records)
 
     return JSONResponse(metrics)
+
+
+@app.get("/api/backtests/{run_id}/curve.json")
+async def get_backtest_curve_json(run_id: str) -> JSONResponse:
+    """
+    获取指定回测的收益/回撤/仓位时间序列（供前端 ECharts 交互式绘制，替代静态 PNG）。
+
+    Args:
+        run_id: 回测 ID
+
+    Returns:
+        JSONResponse: dates/equity_pct/drawdown_pct/position_ratio/benchmark_pct/total_assets/initial_amount
+    """
+    target = next((r for r in _load_run_index() if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+
+    position_file = target.files.get("position_and_account_changes")
+    if not position_file:
+        raise HTTPException(status_code=404, detail="未找到账户变动文件")
+
+    df = load_account_changes_df(os.path.join(RESULTS_DIR, position_file))
+    if df.empty:
+        raise HTTPException(status_code=404, detail="账户变动数据为空或字段不全")
+
+    initial = float(df.iloc[0]["total_assets"])
+    return JSONResponse(compute_account_series(df, initial, include_benchmark=True))
 
 
 @app.get("/api/backtests/{run_id}/curve")

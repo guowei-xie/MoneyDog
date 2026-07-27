@@ -46,6 +46,16 @@ export interface RunRecord {
   summary?: { account?: string[]; stock?: string[] } | null
 }
 
+export interface CurveSeries {
+  dates: string[]
+  equity_pct: number[]
+  drawdown_pct: number[]
+  position_ratio: number[]
+  benchmark_pct: number[] | null
+  total_assets: number[]
+  initial_amount: number
+}
+
 export interface RunStatus {
   running: boolean
   run_id: string | null
