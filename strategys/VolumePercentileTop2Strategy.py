@@ -38,6 +38,9 @@ class VolumePercentileTop2Strategy(BaseStrategy):
         self.take_profit_pct = 0.08
         # 持仓交易日数 > 该值时，尾盘清仓（不含建仓当日则为第 6 个交易日起可触发）
         self.max_hold_trading_days = 5
+        # 选股所需最大历史回看交易日数（与 get_selected_stock_list 中 need+5 一致），
+        # 用于把日线加载区间收窄到「回测窗口 + 该回看天数」，避免全历史扫描（见 BaseStrategy）。
+        self.required_lookback_days = max(self.lookback_days, self.volume_ratio_avg_days + 1) + 5
         self._last_minute_of_day: Optional[str] = None
         self._current_session_date: Optional[str] = None
         self._entry_session_date: Dict[str, str] = {}

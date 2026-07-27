@@ -30,7 +30,13 @@ class BaseStrategy(ABC):
     策略基类
     提供策略回测的基础框架，子类需要实现选股、信号生成等核心逻辑
     """
-    
+
+    # 收窄加载区间时，在 required_lookback_days 之外额外多留的交易日缓冲（应对停牌、边界 preClose 等）
+    _LOOKBACK_BUFFER_DAYS = 10
+    # 派生「回测窗口起点之前的交易日历」时使用的足够早的历史锚点日期
+    _HISTORY_ANCHOR_DATE = "20000101"
+
+
     def __init__(self):
         """
         初始化策略：按当前 config.ini 读取回测配置，并构造撮合 Broker。
@@ -81,6 +87,10 @@ class BaseStrategy(ABC):
         self._selected_stock_by_date: Dict[str, List[str]] = {}
         # 日线全量缓存，选股前一次性加载，多线程选股时只读此内存，不访问 DuckDB
         self._daily_bars_cache: Optional[Dict] = None
+        # 选股所需最大历史回看交易日数：None=需要全历史（默认，向后兼容）。
+        # 子类在 __init__ 中赋一个正整数，即可把日线加载区间收窄到
+        # 回测窗口 + 该回看天数，显著降低全量加载的内存与耗时（见 _compute_cache_start_time）。
+        self.required_lookback_days: Optional[int] = None
 
     def _is_verbose_mode(self) -> bool:
         """
@@ -207,6 +217,26 @@ class BaseStrategy(ABC):
         
         return True
 
+    def _compute_cache_start_time(self) -> str:
+        """
+        计算日线缓存的加载起点日期（YYYYMMDD）。
+
+        当子类声明 required_lookback_days（正整数）时，取回测窗口起点前
+        required_lookback_days + _LOOKBACK_BUFFER_DAYS 个交易日的最早日期作为起点，
+        使加载区间 = 回看窗口 + 回测窗口。未声明（None）或无回测起点时返回 ""（全历史）。
+
+        Returns:
+            str: 起点日期（YYYYMMDD）；"" 表示不设下界、加载全历史。
+        """
+        required = self.required_lookback_days
+        if not required or required <= 0 or not self.backtest_start_time:
+            return ""
+        hist_cal = get_trade_calendar(self._HISTORY_ANCHOR_DATE, self.backtest_start_time)
+        if not hist_cal:
+            return ""
+        need = required + self._LOOKBACK_BUFFER_DAYS
+        return hist_cal[max(0, len(hist_cal) - need)]
+
     def _run_batch_stock_selection(self) -> None:
         """
         对所有交易日执行选股，结果写入 self._selected_stock_by_date。
@@ -218,16 +248,22 @@ class BaseStrategy(ABC):
         if not trade_days:
             return
         self._selected_stock_by_date.clear()
-        # 选股前一次性加载日线全量到内存（主线程、单次 DuckDB 访问）
-        info("加载日线全量数据到内存...")
+        # 选股前一次性加载日线到内存（主线程、单次 DuckDB 访问）。
+        # 若子类声明了 required_lookback_days，则把加载起点收窄到「回测窗口起点前若干交易日」，
+        # 避免每次都全历史扫描（start_time 直接作用于 SQL WHERE，真正减少扫描与内存）。
+        cache_start = self._compute_cache_start_time()
+        if cache_start:
+            info(f"加载日线数据到内存（起点 {cache_start}，按回看窗口收窄）...")
+        else:
+            info("加载日线全量数据到内存...")
         self._daily_bars_cache = get_daily_bars(
             self.global_stock_list,
             period="1d",
-            start_time="",
+            start_time=cache_start,
             end_time=self.backtest_end_time,
             count=-1,
         )
-        info("日线全量数据加载完成")
+        info("日线数据加载完成")
         total_days = len(trade_days)
 
         if self._batch_stock_selection_use_threads:
