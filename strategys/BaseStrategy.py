@@ -17,7 +17,7 @@ from utils.data import (
     get_stock_list_in_main_board,
     get_trade_calendar,
 )
-from utils.logger import debug, info
+from utils.logger import debug, info, warning
 from utils.util import add_num_date_days, generate_minute_snapshot, get_elapsed_time_str
 from utils.backtest_config import refresh_backtest_config, is_verbose_mode, get_cfg
 from utils.broker import Broker
@@ -261,12 +261,20 @@ class BaseStrategy(ABC):
         )
         info("日线数据加载完成")
         total_days = len(trade_days)
+        # 选股失败的交易日 [(trade_date, err), ...]：逐笔 warning，末尾再汇总，避免静默吞掉
+        self._selection_failures: List[tuple] = []
 
         if self._batch_stock_selection_use_threads:
             self._run_batch_stock_selection_multi_thread(trade_days, total_days)
         else:
             self._run_batch_stock_selection_single_thread(trade_days, total_days)
-        info("选股完成")
+        if self._selection_failures:
+            warning(
+                f"选股完成：共 {len(self._selection_failures)}/{total_days} 个交易日选股异常"
+                f"（已按空仓处理），首个：{self._selection_failures[0][0]} -> {self._selection_failures[0][1]}"
+            )
+        else:
+            info("选股完成")
 
     def _run_batch_stock_selection_single_thread(
         self, trade_days: List[str], total_days: int
@@ -284,7 +292,8 @@ class BaseStrategy(ABC):
                     trade_date
                 )
             except Exception as e:
-                debug(f"选股异常 trade_date={trade_date}: {e}")
+                warning(f"选股异常 trade_date={trade_date}: {e}（按空仓处理）")
+                self._selection_failures.append((trade_date, str(e)))
                 self._selected_stock_by_date[trade_date] = []
             if self._progress_callback is not None:
                 try:
@@ -317,7 +326,8 @@ class BaseStrategy(ABC):
                     try:
                         self._selected_stock_by_date[trade_date] = future.result()
                     except Exception as e:
-                        debug(f"选股异常 trade_date={trade_date}: {e}")
+                        warning(f"选股异常 trade_date={trade_date}: {e}（按空仓处理）")
+                        self._selection_failures.append((trade_date, str(e)))
                         self._selected_stock_by_date[trade_date] = []
                     pbar.update(1)
                     completed += 1
