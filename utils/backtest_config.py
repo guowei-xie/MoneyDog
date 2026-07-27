@@ -60,3 +60,19 @@ def get_metrics_params() -> Tuple[float, int]:
 def get_backtest_end_time(fallback: str = "") -> str:
     """读取回测结束日 [BACKTEST] backtest_end_time；缺省时返回 fallback。"""
     return _get_cfg().get("BACKTEST", "backtest_end_time", fallback=fallback)
+
+
+def get_risk_metric_basis() -> str:
+    """
+    风险类指标（波动率/夏普/索提诺）的日收益样本口径。
+
+    配置 [BACKTEST] risk_metric_basis：
+    - 'active'（默认）：仅统计有持仓或净值有波动的交易日，剔除纯空仓静止日的 0% 收益，
+      避免其稀释标准差、虚高夏普/索提诺；
+    - 'all'：使用全部相邻日收益（含空仓静止日，旧口径）。
+
+    Returns:
+        str: 'active' 或 'all'。
+    """
+    val = _get_cfg().get("BACKTEST", "risk_metric_basis", fallback="active").strip().lower()
+    return val if val in ("active", "all") else "active"

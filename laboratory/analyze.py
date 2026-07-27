@@ -19,7 +19,8 @@ plt.rcParams["axes.unicode_minus"] = False
 from utils.util import time_str_to_datetime, get_date_interval, get_trade_days_interval
 from utils.logger import info
 from utils.data import get_trade_calendar, get_daily_bars
-from utils.backtest_config import get_metrics_params, get_backtest_end_time
+from utils.backtest_config import get_metrics_params, get_backtest_end_time, get_risk_metric_basis
+from laboratory.metrics import build_risk_return_series, compute_return_risk_metrics
 
 # 账户变动分析必要列
 REQ_COLS_ACCOUNT = ["trade_date", "total_assets", "stock_count", "stock_value"]
@@ -423,21 +424,24 @@ def analyze_account_changes(
     max_profit_rate = df['total_assets'].max() / initial - 1  # 账户历史峰值相对初始的涨幅
     max_loss_rate = df['total_assets'].min() / initial - 1    # 账户历史谷值相对初始的跌幅
 
+    # 全区间相邻日收益：用于年化收益、外推提示与基准回归（保持原口径）
     daily_returns = df['total_assets'].pct_change().dropna()
-    n = len(daily_returns)              # 有效收益样本天数
-    std = daily_returns.std(ddof=1) if n > 1 else np.nan
-    mean_ret = daily_returns.mean() if n > 0 else np.nan
+    n = len(daily_returns)              # 有效收益样本天数（按经过的交易日数）
+
+    # 风险类指标（波动率/夏普/索提诺）：按配置口径选取日收益样本。
+    # 默认 'active' 剔除纯空仓静止日，避免其 0% 收益稀释标准差、虚高夏普/索提诺。
+    risk_basis = get_risk_metric_basis()
+    risk_returns, active_days = build_risk_return_series(
+        df['total_assets'], df['stock_count'], risk_basis
+    )
+    risk = compute_return_risk_metrics(risk_returns, rf_daily, ann_factor)
+    annual_volatility = risk['annual_volatility']
+    sharpe_ratio = risk['sharpe']
+    sortino_ratio = risk['sortino']
 
     # 年化收益率（几何年化，按有效交易日样本）
     annual_return = (final / initial) ** (trading_days / n) - 1 if n > 0 and final > 0 else np.nan
     ar_ok = pd.notnull(annual_return)
-    # 年化波动率
-    annual_volatility = std * ann_factor if pd.notnull(std) and std > 0 else np.nan
-    # 夏普比率：用配置的无风险利率与年化天数，样本标准差 ddof=1
-    sharpe_ratio = (mean_ret - rf_daily) / std * ann_factor if pd.notnull(std) and std > 0 else np.nan
-    # 索提诺比率：仅以低于无风险日收益的下行波动为分母
-    downside_std = daily_returns[daily_returns < rf_daily].std(ddof=1)
-    sortino_ratio = (mean_ret - rf_daily) / downside_std * ann_factor if pd.notnull(downside_std) and downside_std > 0 else np.nan
     # 卡玛比率：年化收益 / 最大回撤绝对值
     calmar_ratio = annual_return / abs(max_drawdown) if ar_ok and max_drawdown < 0 else np.nan
 
@@ -483,6 +487,8 @@ def analyze_account_changes(
     info(f"最大仓位资金占用率: {fmt_metric(max_position_rate, pct=True)}")
     info(f"空仓天数: {empty_days}")
     info(f"有效收益样本天数: {n}")
+    info(f"风险指标口径: {risk_basis}（active=剔除纯空仓静止日，避免虚高夏普/索提诺）")
+    info(f"风险样本天数: {active_days}")
     if 0 < n < 60:
         info(f"提示：样本交易日数偏少（n={n}），年化夏普/收益/波动率为外推结果，仅供参考")
 
@@ -513,6 +519,8 @@ def analyze_account_changes(
         "max_position_rate": max_position_rate,
         "empty_days": empty_days,
         "sample_days": n,
+        "risk_metric_basis": risk_basis,
+        "active_days": active_days,
     }])
 
 def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") -> pd.DataFrame:
