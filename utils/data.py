@@ -24,6 +24,11 @@ _TABLE_MAP = {
 _INDEX_CODE_TO_DB = {}
 
 
+def _ms_to_date(ms) -> str:
+    """毫秒时间戳按上海时区转 YYYY-MM-DD。"""
+    return pd.to_datetime(int(ms), unit="ms", utc=True).tz_convert("Asia/Shanghai").strftime("%Y-%m-%d")
+
+
 def has_index_1day_data(index_code: str) -> bool:
     """
     检查数据库中是否存在指定指数的日线行情数据（index_daily）。
@@ -116,11 +121,7 @@ def _coverage_for_table(table: str, code: str) -> dict:
     count = int(row["c"]) if row["c"] is not None else 0
     if not count or pd.isna(row["mn"]):
         return {"start": None, "end": None, "count": 0}
-
-    def _to_date(ms) -> str:
-        return pd.to_datetime(int(ms), unit="ms", utc=True).tz_convert("Asia/Shanghai").strftime("%Y-%m-%d")
-
-    return {"start": _to_date(row["mn"]), "end": _to_date(row["mx"]), "count": count}
+    return {"start": _ms_to_date(row["mn"]), "end": _ms_to_date(row["mx"]), "count": count}
 
 
 def get_data_coverage(code: str, market: str = "stock") -> dict:
@@ -158,11 +159,7 @@ def get_overall_coverage() -> dict:
         return {"start": None, "end": None, "trade_days": 0}
     if pd.isna(row["mn"]):
         return {"start": None, "end": None, "trade_days": 0}
-
-    def _to_date(ms) -> str:
-        return pd.to_datetime(int(ms), unit="ms", utc=True).tz_convert("Asia/Shanghai").strftime("%Y-%m-%d")
-
-    return {"start": _to_date(row["mn"]), "end": _to_date(row["mx"]), "trade_days": int(row["d"])}
+    return {"start": _ms_to_date(row["mn"]), "end": _ms_to_date(row["mx"]), "trade_days": int(row["d"])}
 
 
 def get_stock_list_in_main_board() -> list:

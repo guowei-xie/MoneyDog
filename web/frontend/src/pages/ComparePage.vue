@@ -16,7 +16,7 @@ import CompareChart from '@/components/charts/CompareChart.vue'
 import { useHistoryStore } from '@/stores/history'
 import { useCompareStore, type CompareEntry } from '@/stores/compare'
 import { extractError } from '@/api/client'
-import { formatMetric } from '@/utils/metrics'
+import { formatMetric, pickMetrics } from '@/utils/metrics'
 import { formatPeriod } from '@/utils/format'
 
 const message = useMessage()
@@ -51,15 +51,15 @@ const chartSeries = computed(() =>
   })),
 )
 
-// 指标对照表：每行一个回测。
-const metricCols: { key: string; label: string; kind: 'pct' | 'num' }[] = [
-  { key: 'profit_rate', label: '总收益率', kind: 'pct' },
-  { key: 'annual_return', label: '年化收益', kind: 'pct' },
-  { key: 'max_drawdown', label: '最大回撤', kind: 'pct' },
-  { key: 'sharpe_ratio', label: '夏普', kind: 'num' },
-  { key: 'calmar_ratio', label: '卡玛', kind: 'num' },
-  { key: 'max_position_rate', label: '最大仓位', kind: 'pct' },
-]
+// 指标对照表：每行一个回测。列定义复用 METRIC_DEFS 的 label/kind。
+const metricCols = pickMetrics([
+  'profit_rate',
+  'annual_return',
+  'max_drawdown',
+  'sharpe_ratio',
+  'calmar_ratio',
+  'max_position_rate',
+])
 
 const tableColumns = computed<DataTableColumns<CompareEntry>>(() => [
   { title: '回测', key: 'id', render: (e) => `${e.id} · ${e.record.strategy.strategy_class}` },

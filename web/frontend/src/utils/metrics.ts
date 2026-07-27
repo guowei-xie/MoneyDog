@@ -25,6 +25,13 @@ export const METRIC_DEFS: MetricDef[] = [
   { key: 'empty_days', label: '空仓天数', kind: 'int' },
 ]
 
+// 按 key 顺序从 METRIC_DEFS 中挑选指标定义（供对比表等复用统一的 label/kind）。
+export function pickMetrics(keys: string[]): MetricDef[] {
+  return keys
+    .map((k) => METRIC_DEFS.find((d) => d.key === k))
+    .filter((d): d is MetricDef => d !== undefined)
+}
+
 export function formatMetric(value: number | string | null | undefined, kind: MetricDef['kind']): string {
   if (value === null || value === undefined || value === '') return '-'
   const num = typeof value === 'number' ? value : Number(value)

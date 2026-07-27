@@ -24,7 +24,9 @@ onMounted(() => {
   observer.observe(el.value)
 })
 
-watch(() => props.option, render, { deep: true })
+// option 由各图表以 computed 传入，每次变化都是新对象引用，浅层 watch 即可触发，
+// 避免 deep 递归遍历大数据数组的开销。
+watch(() => props.option, render)
 
 onBeforeUnmount(() => {
   observer?.disconnect()

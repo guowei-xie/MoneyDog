@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NCard,
@@ -19,6 +19,7 @@ import {
 import { getDashboard } from '@/api/dashboard'
 import { extractError } from '@/api/client'
 import { formatMetric } from '@/utils/metrics'
+import { linkCell } from '@/utils/table'
 import type { DashboardSummary, RunBrief } from '@/types/dashboard'
 
 const message = useMessage()
@@ -40,7 +41,7 @@ const recentColumns: DataTableColumns<RunBrief> = [
   {
     title: '回测 ID',
     key: 'id',
-    render: (r) => h('a', { style: { color: '#38bdf8', cursor: 'pointer' }, onClick: () => router.push(`/runs/${r.id}`) }, r.id),
+    render: (r) => linkCell(r.id, () => router.push(`/runs/${r.id}`)),
   },
   { title: '策略', key: 'strategy_label', render: (r) => r.strategy_label.split('.').pop() },
   { title: '总收益%', key: 'profit_rate', align: 'right', render: (r) => formatMetric(r.profit_rate, 'pct') },

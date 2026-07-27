@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import BaseChart from './BaseChart.vue'
-import type { EChartsOption } from '@/utils/echarts'
+import { pctPointFormatter, type EChartsOption } from '@/utils/echarts'
 import type { CurveSeries } from '@/types/backtest'
 
 const props = defineProps<{ curve: CurveSeries }>()
@@ -51,10 +51,7 @@ const option = computed<EChartsOption>(() => {
 
   return {
     backgroundColor: 'transparent',
-    tooltip: {
-      trigger: 'axis',
-      valueFormatter: (v: number | string) => (v == null ? '-' : `${Number(v).toFixed(2)}%`),
-    },
+    tooltip: { trigger: 'axis', valueFormatter: pctPointFormatter },
     legend: { data: legend, top: 0, textStyle: { color: '#cbd5e1' } },
     axisPointer: { link: [{ xAxisIndex: 'all' }] },
     grid: [

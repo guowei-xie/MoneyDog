@@ -144,39 +144,71 @@ def _diff_results_files(
     return sorted(changed)
 
 
+# run_index.json 解析缓存（按文件 mtime 失效）：单页结果视图会连续多次读取索引，
+# 避免每次都重新 json.load + Pydantic 校验整份记录。
+_RUN_INDEX_CACHE: Optional[List[RunRecord]] = None
+_RUN_INDEX_MTIME: float = 0.0
+
+
 def _load_run_index() -> List[RunRecord]:
     """
-    加载 run_index.json 中的所有回测记录。
+    加载 run_index.json 中的所有回测记录（按 mtime 命中缓存）。
+
+    返回缓存列表的浅拷贝：允许调用方增删列表结构而不污染缓存，
+    对记录对象字段的就地修改仍会在 _save_run_index 时落盘。
 
     Returns:
         list[RunRecord]: 回测记录列表
     """
+    global _RUN_INDEX_CACHE, _RUN_INDEX_MTIME
     _ensure_results_dir()
     if not os.path.exists(RUN_INDEX_PATH):
         return []
+    mtime = os.path.getmtime(RUN_INDEX_PATH)
+    if _RUN_INDEX_CACHE is not None and mtime == _RUN_INDEX_MTIME:
+        return list(_RUN_INDEX_CACHE)
     try:
         with open(RUN_INDEX_PATH, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        return [RunRecord(**item) for item in raw]
+        records = [RunRecord(**item) for item in raw]
     except Exception as exc:  # noqa: BLE001
         error(f"加载回测索引失败: {exc}")
         return []
+    _RUN_INDEX_CACHE = records
+    _RUN_INDEX_MTIME = mtime
+    return list(records)
 
 
 def _save_run_index(records: List[RunRecord]) -> None:
     """
-    将回测记录列表写入 run_index.json。
+    将回测记录列表写入 run_index.json，并同步刷新解析缓存。
 
     Args:
         records: 回测记录列表
     """
+    global _RUN_INDEX_CACHE, _RUN_INDEX_MTIME
     _ensure_results_dir()
     try:
         payload = [record.model_dump() for record in records]
         with open(RUN_INDEX_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        _RUN_INDEX_CACHE = list(records)
+        _RUN_INDEX_MTIME = os.path.getmtime(RUN_INDEX_PATH)
     except Exception as exc:  # noqa: BLE001
         error(f"保存回测索引失败: {exc}")
+
+
+def _get_record_or_404(run_id: str) -> RunRecord:
+    """按 run_id 查找回测记录，未找到抛 404（消除各端点重复的查找+404 样板）。"""
+    target = next((r for r in _load_run_index() if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+    return target
+
+
+def _strategy_label(strategy: StrategyConfig) -> str:
+    """策略展示标签：module.class。"""
+    return f"{strategy.strategy_module}.{strategy.strategy_class}"
 
 
 def _build_default_backtest_config(cfg: configparser.ConfigParser) -> BacktestConfig:
@@ -213,9 +245,18 @@ def _build_default_backtest_config(cfg: configparser.ConfigParser) -> BacktestCo
     )
 
 
+def _json_safe_cell(value: Any) -> Any:
+    """单个单元格转 JSON 安全值：时间转 ISO、numpy 转原生、NaN 转 None。"""
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        value = value.item()
+    return None if isinstance(value, float) and pd.isna(value) else value
+
+
 def _extract_metrics_from_df(df: pd.DataFrame) -> Dict[str, Any]:
     """
-    将 analyze_account_changes 返回的单行 DataFrame 转换为 dict。
+    将 analyze_account_changes 返回的单行 DataFrame 转换为 JSON 安全 dict。
 
     Args:
         df: 账户分析结果 DataFrame
@@ -225,17 +266,7 @@ def _extract_metrics_from_df(df: pd.DataFrame) -> Dict[str, Any]:
     """
     if df is None or df.empty:
         return {}
-    row = df.iloc[0].to_dict()
-    # 确保 JSON 可序列化（numpy 类型转原生类型；NaN 统一转 None 以产出合法 JSON）
-    result: Dict[str, Any] = {}
-    for key, value in row.items():
-        if isinstance(value, (pd.Timestamp, datetime)):
-            result[key] = value.isoformat()
-            continue
-        if hasattr(value, "item"):
-            value = value.item()
-        result[key] = None if isinstance(value, float) and pd.isna(value) else value
-    return result
+    return {key: _json_safe_cell(value) for key, value in df.iloc[0].to_dict().items()}
 
 
 # analyze_transactions Excel 中文列 -> 前端稳定英文键
@@ -271,18 +302,7 @@ def _json_safe_records(df: pd.DataFrame, rename: Optional[Dict[str, str]] = None
         return []
     if rename:
         df = df.rename(columns=rename)
-    records: List[Dict[str, Any]] = []
-    for _, row in df.iterrows():
-        rec: Dict[str, Any] = {}
-        for key, value in row.items():
-            if isinstance(value, (pd.Timestamp, datetime)):
-                rec[key] = value.isoformat()
-                continue
-            if hasattr(value, "item"):
-                value = value.item()
-            rec[key] = None if isinstance(value, float) and pd.isna(value) else value
-        records.append(rec)
-    return records
+    return [{key: _json_safe_cell(value) for key, value in row.items()} for _, row in df.iterrows()]
 
 
 def _fmt_trade_date(value: Any) -> str:
@@ -523,7 +543,7 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
     for key, value in bt.model_dump().items():
         mem_cfg.set("BACKTEST", key, str(value).lower() if isinstance(value, bool) else str(value))
 
-    strategy_label = f"{payload.strategy.strategy_module}.{payload.strategy.strategy_class}"
+    strategy_label = _strategy_label(payload.strategy)
     period = f"{bt.backtest_start_time}-{bt.backtest_end_time}"
 
     # 原子占位：单回测槽位，已有运行则拒绝（409），避免并发提交竞态与内存配置串扰。
@@ -806,9 +826,7 @@ async def get_backtest(run_id: str) -> RunRecord:
     Returns:
         RunRecord: 对应回测记录
     """
-    target = next((r for r in _load_run_index() if r.id == run_id), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+    target = _get_record_or_404(run_id)
     return target
 
 
@@ -869,9 +887,7 @@ async def get_backtest_trades(run_id: str) -> JSONResponse:
         JSONResponse: {"trades": [ {code, open_time, open_price, close_time, close_price,
                        net_pct, gross_pct, closed, hold_days, commission, tax, cost, remark}, ... ]}
     """
-    target = next((r for r in _load_run_index() if r.id == run_id), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+    target = _get_record_or_404(run_id)
 
     file_name = target.files.get("analyze_transactions")
     if not file_name:
@@ -899,9 +915,7 @@ async def get_backtest_positions(run_id: str) -> JSONResponse:
         JSONResponse: {"positions": [ {trade_date, stock_count, stock_cost, stock_value,
                        available_amount, total_assets}, ... ]}
     """
-    target = next((r for r in _load_run_index() if r.id == run_id), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+    target = _get_record_or_404(run_id)
 
     file_name = target.files.get("position_and_account_changes")
     if not file_name:
@@ -928,9 +942,7 @@ async def get_backtest_kline(run_id: str, code: str) -> JSONResponse:
         JSONResponse: {code, period, bars:[{date,open,high,low,close,volume}],
                        markers:[{date,time,action,price,volume,desc}]}
     """
-    target = next((r for r in _load_run_index() if r.id == run_id), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+    target = _get_record_or_404(run_id)
 
     start = target.backtest.backtest_start_time
     end = target.backtest.backtest_end_time
@@ -979,9 +991,7 @@ async def get_backtest_curve_json(run_id: str) -> JSONResponse:
     Returns:
         JSONResponse: dates/equity_pct/drawdown_pct/position_ratio/benchmark_pct/total_assets/initial_amount
     """
-    target = next((r for r in _load_run_index() if r.id == run_id), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+    target = _get_record_or_404(run_id)
 
     position_file = target.files.get("position_and_account_changes")
     if not position_file:
@@ -1135,6 +1145,8 @@ async def get_market_bars(
 
 # 全市场股票代码缓存（首次查询后复用，避免每次扫描 stock_list 表）
 _STOCK_CODES_CACHE: List[str] = []
+# 整体数据覆盖缓存（进程内行情数据静态，避免每次仪表盘请求全表聚合）
+_COVERAGE_CACHE: Optional[Dict[str, Any]] = None
 # 候选指数（代码 -> 中文名），实际是否可用由 has_index_1day_data 校验
 _INDEX_CANDIDATES = {
     "000001.SH": "上证指数",
@@ -1146,13 +1158,29 @@ _INDEX_CANDIDATES = {
 }
 
 
+def _get_stock_codes() -> List[str]:
+    """惰性获取并缓存全市场股票代码（首次查询扫描 stock_list）。"""
+    global _STOCK_CODES_CACHE  # noqa: PLW0603
+    if not _STOCK_CODES_CACHE:
+        _STOCK_CODES_CACHE = get_stock_list_in_sector("")
+    return _STOCK_CODES_CACHE
+
+
+def _get_overall_coverage_cached() -> Dict[str, Any]:
+    """惰性获取并缓存整体数据覆盖（全表聚合较重，进程内复用）。"""
+    global _COVERAGE_CACHE  # noqa: PLW0603
+    if _COVERAGE_CACHE is None:
+        _COVERAGE_CACHE = get_overall_coverage()
+    return _COVERAGE_CACHE
+
+
 def _run_brief(record: RunRecord) -> Dict[str, Any]:
     """提取回测记录的总览简报字段。"""
     m = record.metrics or {}
     return {
         "id": record.id,
         "created_at": record.created_at,
-        "strategy_label": f"{record.strategy.strategy_module}.{record.strategy.strategy_class}",
+        "strategy_label": _strategy_label(record.strategy),
         "profit_rate": m.get("profit_rate"),
         "max_drawdown": m.get("max_drawdown"),
         "sharpe_ratio": m.get("sharpe_ratio"),
@@ -1167,7 +1195,6 @@ async def get_dashboard() -> JSONResponse:
     Returns:
         JSONResponse: {total_runs, running, active_run_id, recent[], best_by_sharpe, data{...}}
     """
-    global _STOCK_CODES_CACHE  # noqa: PLW0603
     records = _load_run_index()
     recent = [_run_brief(r) for r in reversed(records[-8:])]
 
@@ -1180,13 +1207,13 @@ async def get_dashboard() -> JSONResponse:
             best_sharpe = s
             best = _run_brief(r)
 
-    if not _STOCK_CODES_CACHE:
-        try:
-            _STOCK_CODES_CACHE = get_stock_list_in_sector("")
-        except Exception as exc:  # noqa: BLE001
-            error(f"获取股票列表失败: {exc}")
+    try:
+        stock_count = len(_get_stock_codes())
+    except Exception as exc:  # noqa: BLE001
+        error(f"获取股票列表失败: {exc}")
+        stock_count = 0
 
-    coverage = get_overall_coverage()
+    coverage = _get_overall_coverage_cached()
     return JSONResponse(
         {
             "total_runs": len(records),
@@ -1195,7 +1222,7 @@ async def get_dashboard() -> JSONResponse:
             "recent": recent,
             "best_by_sharpe": best,
             "data": {
-                "stock_count": len(_STOCK_CODES_CACHE),
+                "stock_count": stock_count,
                 "daily_start": coverage.get("start"),
                 "daily_end": coverage.get("end"),
                 "trade_days": coverage.get("trade_days"),
@@ -1216,15 +1243,13 @@ async def list_market_stocks(q: str = "", limit: int = 50) -> JSONResponse:
     Returns:
         JSONResponse: {"stocks": [{"code": ...}, ...], "total": 匹配总数}
     """
-    global _STOCK_CODES_CACHE  # noqa: PLW0603
-    if not _STOCK_CODES_CACHE:
-        try:
-            _STOCK_CODES_CACHE = get_stock_list_in_sector("")
-        except Exception as exc:  # noqa: BLE001
-            error(f"获取股票列表失败: {exc}")
-            raise HTTPException(status_code=500, detail="获取股票列表失败") from exc
+    try:
+        codes = _get_stock_codes()
+    except Exception as exc:  # noqa: BLE001
+        error(f"获取股票列表失败: {exc}")
+        raise HTTPException(status_code=500, detail="获取股票列表失败") from exc
     kw = q.strip().upper()
-    matched = [c for c in _STOCK_CODES_CACHE if kw in c.upper()] if kw else _STOCK_CODES_CACHE
+    matched = [c for c in codes if kw in c.upper()] if kw else codes
     return JSONResponse({"stocks": [{"code": c} for c in matched[:limit]], "total": len(matched)})
 
 

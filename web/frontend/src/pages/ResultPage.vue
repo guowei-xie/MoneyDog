@@ -39,22 +39,14 @@ async function load() {
     // 命中历史缓存则复用，否则按 id 精确拉取单条记录（深链/刷新场景）。
     record.value = history.find(runId.value) ?? (await getBacktest(runId.value))
     metrics.value = record.value.metrics ?? (await getMetrics(runId.value))
-    // 曲线/交易/持仓独立获取，任一失败不阻断其余展示。
-    try {
-      curve.value = await getCurve(runId.value)
-    } catch {
-      curve.value = null
-    }
-    try {
-      trades.value = await getTrades(runId.value)
-    } catch {
-      trades.value = []
-    }
-    try {
-      positions.value = await getPositions(runId.value)
-    } catch {
-      positions.value = []
-    }
+    // 曲线/交易/持仓相互独立，并发获取；任一失败降级为默认值、不阻断其余展示。
+    const id = runId.value
+    const safe = <T,>(p: Promise<T>, fallback: T): Promise<T> => p.catch(() => fallback)
+    ;[curve.value, trades.value, positions.value] = await Promise.all([
+      safe(getCurve(id), null),
+      safe(getTrades(id), [] as Trade[]),
+      safe(getPositions(id), [] as PositionRow[]),
+    ])
   } catch (err) {
     errorMsg.value = extractError(err)
   } finally {

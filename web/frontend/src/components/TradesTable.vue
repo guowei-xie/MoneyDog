@@ -2,6 +2,7 @@
 import { computed, h, ref } from 'vue'
 import { NDataTable, NInput, NSpace, NSwitch, NText, NTag, type DataTableColumns } from 'naive-ui'
 import { formatMoney, formatPct } from '@/utils/format'
+import { numSorter, linkCell } from '@/utils/table'
 import type { Trade } from '@/types/backtest'
 
 const props = defineProps<{ trades: Trade[] }>()
@@ -24,17 +25,13 @@ function pctCell(v: number | null) {
   return h('span', { style: { color } }, formatPct(v))
 }
 
-const numSorter = (key: keyof Trade) => (a: Trade, b: Trade) =>
-  ((a[key] as number) ?? -Infinity) - ((b[key] as number) ?? -Infinity)
-
 const columns: DataTableColumns<Trade> = [
   {
     title: '股票',
     key: 'code',
     fixed: 'left',
     width: 110,
-    render: (t) =>
-      h('a', { style: { color: '#38bdf8', cursor: 'pointer' }, onClick: () => emit('drill', t.code) }, t.code),
+    render: (t) => linkCell(t.code, () => emit('drill', t.code)),
   },
   { title: '建仓时间', key: 'open_time', render: (t) => t.open_time ?? '-' },
   { title: '建仓价', key: 'open_price', align: 'right', render: (t) => formatMoney(t.open_price) },
@@ -44,24 +41,24 @@ const columns: DataTableColumns<Trade> = [
     title: '净涨跌幅',
     key: 'net_pct',
     align: 'right',
-    sorter: numSorter('net_pct'),
+    sorter: numSorter<Trade>('net_pct'),
     render: (t) => pctCell(t.net_pct),
   },
   {
     title: '毛涨跌幅',
     key: 'gross_pct',
     align: 'right',
-    sorter: numSorter('gross_pct'),
+    sorter: numSorter<Trade>('gross_pct'),
     render: (t) => pctCell(t.gross_pct),
   },
   {
     title: '持仓天数',
     key: 'hold_days',
     align: 'right',
-    sorter: numSorter('hold_days'),
+    sorter: numSorter<Trade>('hold_days'),
     render: (t) => t.hold_days ?? '-',
   },
-  { title: '总成本', key: 'cost', align: 'right', sorter: numSorter('cost'), render: (t) => formatMoney(t.cost, 0) },
+  { title: '总成本', key: 'cost', align: 'right', sorter: numSorter<Trade>('cost'), render: (t) => formatMoney(t.cost, 0) },
   {
     title: '状态',
     key: 'closed',

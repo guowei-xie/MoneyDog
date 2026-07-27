@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import BaseChart from './BaseChart.vue'
+import { formatPct } from '@/utils/format'
 import type { EChartsOption } from '@/utils/echarts'
 import type { CurveSeries } from '@/types/backtest'
 
@@ -13,7 +14,7 @@ const option = computed<EChartsOption>(() => {
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
-      valueFormatter: (v: number | string) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
+      valueFormatter: (v: number | string) => formatPct(v == null ? null : Number(v)),
     },
     grid: { left: 56, right: 24, top: 24, bottom: 40 },
     xAxis: { type: 'category', data: c.dates, boundaryGap: false },
@@ -21,7 +22,7 @@ const option = computed<EChartsOption>(() => {
       type: 'value',
       min: 0,
       max: 1,
-      axisLabel: { formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+      axisLabel: { formatter: (v: number) => formatPct(v, 0) },
     },
     dataZoom: [
       { type: 'inside' },
