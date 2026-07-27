@@ -225,9 +225,12 @@ class Broker:
         Args:
             stock_code: 股票代码
         Returns:
-            int: 可用仓位
+            int: 可用仓位；未持仓该股票时返回 0（不再抛 KeyError）
         """
-        return self.positions[stock_code]['volume'] - self.positions[stock_code]['disabled_volume']
+        pos = self.get_position(stock_code)  # 未持仓返回 {}
+        if not pos:
+            return 0
+        return pos['volume'] - pos.get('disabled_volume', 0)
 
     def set_position(self, stock_code: str, cost_price: float, volume: int) -> bool:
         """

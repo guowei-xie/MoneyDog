@@ -25,6 +25,9 @@ from laboratory.metrics import build_risk_return_series, compute_return_risk_met
 # 账户变动分析必要列
 REQ_COLS_ACCOUNT = ["trade_date", "total_assets", "stock_count", "stock_value"]
 
+# 年化外推提示阈值：有效样本天数低于此值时，年化夏普/收益/波动率为外推结果，仅供参考
+EXTRAPOLATION_MIN_SAMPLE = 60
+
 
 def fmt_metric(v, pct: bool = False, nd: int = 4) -> str:
     """
@@ -489,7 +492,8 @@ def analyze_account_changes(
     info(f"有效收益样本天数: {n}")
     info(f"风险指标口径: {risk_basis}（active=剔除纯空仓静止日，避免虚高夏普/索提诺）")
     info(f"风险样本天数: {active_days}")
-    if 0 < n < 60:
+    annualized_extrapolated = 0 < n < EXTRAPOLATION_MIN_SAMPLE
+    if annualized_extrapolated:
         info(f"提示：样本交易日数偏少（n={n}），年化夏普/收益/波动率为外推结果，仅供参考")
 
     # 绘制账户曲线（复用已算的指数曲线，避免重复查询指数日线）
@@ -521,6 +525,7 @@ def analyze_account_changes(
         "sample_days": n,
         "risk_metric_basis": risk_basis,
         "active_days": active_days,
+        "annualized_extrapolated": annualized_extrapolated,
     }])
 
 def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") -> pd.DataFrame:
@@ -616,6 +621,8 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
             hold_days = _safe_hold_days(close_date8, str(build_t)[:8], trade_calendar)
 
             # 毛收益（未扣成本）与净收益（扣双向佣金+卖出印花税）
+            # 口径说明：net_rate = 净盈亏 / 买入成交额。分子已扣双向佣金+印花税（total_costs），
+            # 分母 buy_cost 取买入成交额（不含买入佣金）；因佣金远小于成交额，二者基数差异对结果影响可忽略。
             buy_cost = bp * buy_shares
             total_commission = buy_df['commission'].sum() + sell_df['commission'].sum()
             total_tax = sell_df['tax'].sum()

@@ -284,9 +284,12 @@ def is_macd_top(macd_data: pd.DataFrame) -> bool:
 
 def is_macd_bottom(macd_data: pd.DataFrame) -> bool:
     """
-    判断MACD柱是否见底
-    MACD柱见底定义：T0为当前分钟，T-1分钟MACD绿柱短于T-2分钟MACD绿柱，且T-2分钟MACD绿柱短于T-3分钟MACD绿柱，但T-3分钟MACD绿柱长于T-4分钟MACD绿柱。
-    
+    判断MACD柱是否见底（绿柱缩短后企稳的 V 形拐点）。
+
+    记最近五根 MACD 柱由新到旧为 m1..m5（m1=最新）。见底条件（与实现一致）：
+    m1 > m2 > m3 > m4 < m5，且五根均为负（绿柱）。
+    即绿柱经历 m5→m4 的走长到 m4 的最长，再 m4→m1 逐根缩短的拐头企稳形态。
+
     Args:
         macd_data: 包含MACD列的行情数据
     Returns:
@@ -294,11 +297,11 @@ def is_macd_bottom(macd_data: pd.DataFrame) -> bool:
     """
     if len(macd_data) < 5:
         return False
-    
-    # 获取最近五根MACD柱值  
+
+    # 获取最近五根MACD柱值
     m1, m2, m3, m4, m5 = macd_data['macd'].iloc[-1:-6:-1]
-    
-    # 判断是否满足见底条件：m1 < m2 < m3 < m4 < m5
+
+    # 判断是否满足见底条件：m1 > m2 > m3 > m4 < m5，且全为负
     return m1 > m2 > m3 > m4 < m5 and m1 < 0 and m2 < 0 and m3 < 0 and m4 < 0 and m5 < 0
 
 # 计算BOLL带（中轨、上轨、下轨）

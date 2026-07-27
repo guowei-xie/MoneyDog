@@ -245,6 +245,8 @@ def _build_account_summary(metrics: Dict[str, Any]) -> List[str]:
         lines.append(f"空仓天数: {empty_days}")
     if sample_days is not None:
         lines.append(f"有效收益样本天数: {sample_days}")
+    if metrics.get("annualized_extrapolated"):
+        lines.append(f"⚠️ 样本偏少：年化夏普/收益/波动率为外推结果，仅供参考")
     active_days = metrics.get("active_days")
     risk_basis = metrics.get("risk_metric_basis")
     if risk_basis is not None:

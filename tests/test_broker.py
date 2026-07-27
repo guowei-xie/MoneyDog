@@ -80,6 +80,19 @@ class TestSell:
         assert b.sell(_sell_signal(volume=2000)) is False
 
 
+class TestGetAvailableVolume:
+    def test_untracked_code_returns_zero_without_keyerror(self):
+        b = _broker()
+        assert b.get_available_volume("NOT_HELD.SZ") == 0
+
+    def test_available_excludes_disabled_volume(self):
+        b = _broker()
+        b.buy(_buy_signal(volume=1000))  # 买入后 1000 全部锁定
+        assert b.get_available_volume("000001.SZ") == 0
+        b.unlock_position()
+        assert b.get_available_volume("000001.SZ") == 1000
+
+
 class TestSetPositionWeightedCost:
     def test_add_uses_volume_weighted_average_cost(self):
         b = _broker()
