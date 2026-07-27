@@ -48,3 +48,6 @@ yarl==1.22.0
 fastapi
 uvicorn
 jinja2
+
+# 开发/测试依赖（运行 pytest 单测用，生产运行不需要）
+pytest==9.1.1

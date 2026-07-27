@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+# 项目以脚本方式从仓库根运行，未打包；这里把根目录加入 import 路径，
+# 使 `import utils.xxx` / `import laboratory.xxx` 在测试中可解析。
+pythonpath = ["."]
+# 仅收集新的断言型测试目录，避免误收 test/ 下的历史 print 手动脚本。
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
