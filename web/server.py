@@ -13,11 +13,10 @@ import shutil
 
 import configparser
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from main import load_strategy
 from utils.logger import error, info
@@ -41,6 +40,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
 RUN_INDEX_PATH = os.path.join(RESULTS_DIR, "run_index.json")
+
+# 前端构建产物目录（web/frontend/dist），由 Vue SPA `npm run build` 生成
+FRONTEND_DIST = os.path.join(BASE_DIR, "frontend", "dist")
+FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
+FRONTEND_ASSETS = os.path.join(FRONTEND_DIST, "assets")
 
 # 当前正在后台运行的回测任务信息（用于中止回测）
 CURRENT_BACKTEST: Dict[str, Any] = {
@@ -322,25 +326,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
-
-static_dir = os.path.join(BASE_DIR, "static")
-if os.path.isdir(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request) -> HTMLResponse:
-    """
-    渲染首页，提供单页前端应用入口。
-
-    Args:
-        request: FastAPI Request 对象
-
-    Returns:
-        HTMLResponse: 首页 HTML 内容
-    """
-    return templates.TemplateResponse("index.html", {"request": request})
+# 挂载前端构建产物中的哈希资源（仅在 dist 已构建时）
+if os.path.isdir(FRONTEND_ASSETS):
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS), name="assets")
 
 
 @app.get("/api/strategies", response_model=List[StrategyInfo])
@@ -826,6 +814,39 @@ async def get_backtest_code(run_id: str) -> JSONResponse:
             "code": content,
         },
     )
+
+
+# dist 未构建时的兜底提示页（保证纯 Python 环境也能启动并给出指引）
+_DEV_FALLBACK_HTML = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>MoneyDog</title></head>
+<body style="font-family:-apple-system,Segoe UI,sans-serif;background:#0b1220;color:#e2e8f0;padding:48px;line-height:1.8">
+<h1 style="color:#22c55e">MoneyDog 量化交易平台</h1>
+<p>前端尚未构建。请任选其一：</p>
+<ul>
+<li>开发模式：<code>cd web/frontend &amp;&amp; npm install &amp;&amp; npm run dev</code>，然后访问 <a style="color:#4ade80" href="http://127.0.0.1:5173">http://127.0.0.1:5173</a>（已代理 /api）。</li>
+<li>生产模式：<code>cd web/frontend &amp;&amp; npm run build</code> 生成 dist 后刷新本页。</li>
+</ul>
+</body></html>"""
+
+
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    """
+    SPA 兜底路由：非 /api、非 /assets 的路径一律返回前端入口 index.html，
+    以支持 /runs/:id、/market 等前端深链在刷新时正常加载。
+
+    Args:
+        full_path: 捕获的完整路径（不含前导斜杠）
+
+    Returns:
+        FileResponse: 已构建时返回 dist/index.html；否则返回构建指引兜底页
+    """
+    # /api 前缀交由真实 API 路由处理；能落到此处说明该 API 不存在，返回 404 而非 index.html
+    if full_path == "api" or full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    if os.path.exists(FRONTEND_INDEX):
+        return FileResponse(FRONTEND_INDEX, media_type="text/html")
+    return HTMLResponse(_DEV_FALLBACK_HTML)
 
 
 def get_app() -> FastAPI:
