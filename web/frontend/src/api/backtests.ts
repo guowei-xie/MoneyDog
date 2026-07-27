@@ -2,6 +2,7 @@ import client from './client'
 import type {
   AppConfig,
   CurveSeries,
+  KLineData,
   PositionRow,
   RunBacktestRequest,
   RunRecord,
@@ -71,6 +72,14 @@ export async function getPositions(runId: string): Promise<PositionRow[]> {
     `/backtests/${encodeURIComponent(runId)}/positions`,
   )
   return data.positions
+}
+
+export async function getKline(runId: string, code: string): Promise<KLineData> {
+  const { data } = await client.get<KLineData>(
+    `/backtests/${encodeURIComponent(runId)}/kline`,
+    { params: { code } },
+  )
+  return data
 }
 
 export async function getCode(runId: string): Promise<{ file_name: string; code: string }> {

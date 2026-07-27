@@ -81,6 +81,31 @@ export interface PositionRow {
   total_assets: number
 }
 
+export interface Bar {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface TradeMarker {
+  date: string
+  time: string
+  action: string
+  price: number
+  volume: number
+  desc: string
+}
+
+export interface KLineData {
+  code: string
+  period: string
+  bars: Bar[]
+  markers: TradeMarker[]
+}
+
 export interface RunStatus {
   running: boolean
   run_id: string | null

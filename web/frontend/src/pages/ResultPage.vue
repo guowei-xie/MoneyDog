@@ -8,6 +8,7 @@ import EquityChart from '@/components/charts/EquityChart.vue'
 import PositionChart from '@/components/charts/PositionChart.vue'
 import TradesTable from '@/components/TradesTable.vue'
 import PositionsTable from '@/components/PositionsTable.vue'
+import KlineModal from '@/components/KlineModal.vue'
 import { useHistoryStore } from '@/stores/history'
 import { getBacktest, getCurve, getMetrics, getTrades, getPositions, recordUrl } from '@/api/backtests'
 import { extractError } from '@/api/client'
@@ -26,6 +27,7 @@ const curve = ref<CurveSeries | null>(null)
 const trades = ref<Trade[]>([])
 const positions = ref<PositionRow[]>([])
 const codeModal = ref<InstanceType<typeof CodeModal> | null>(null)
+const klineModal = ref<InstanceType<typeof KlineModal> | null>(null)
 
 async function load() {
   loading.value = true
@@ -113,7 +115,7 @@ onMounted(load)
       <NCard title="交易与持仓明细">
         <NTabs type="line" animated>
           <NTabPane name="trades" :tab="`交易明细 (${trades.length})`">
-            <TradesTable :trades="trades" />
+            <TradesTable :trades="trades" @drill="(code) => klineModal?.open(runId, code)" />
           </NTabPane>
           <NTabPane name="positions" :tab="`持仓时间线 (${positions.length})`">
             <PositionsTable :positions="positions" />
@@ -124,6 +126,7 @@ onMounted(load)
       <NEmpty v-if="!record" description="无数据" />
     </NSpace>
     <CodeModal ref="codeModal" />
+    <KlineModal ref="klineModal" />
   </NSpin>
 </template>
 

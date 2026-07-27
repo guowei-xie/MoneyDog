@@ -5,6 +5,7 @@ import { formatMoney, formatPct } from '@/utils/format'
 import type { Trade } from '@/types/backtest'
 
 const props = defineProps<{ trades: Trade[] }>()
+const emit = defineEmits<{ (e: 'drill', code: string): void }>()
 
 const keyword = ref('')
 const onlyClosed = ref(false)
@@ -27,7 +28,14 @@ const numSorter = (key: keyof Trade) => (a: Trade, b: Trade) =>
   ((a[key] as number) ?? -Infinity) - ((b[key] as number) ?? -Infinity)
 
 const columns: DataTableColumns<Trade> = [
-  { title: '股票', key: 'code', fixed: 'left', width: 110 },
+  {
+    title: '股票',
+    key: 'code',
+    fixed: 'left',
+    width: 110,
+    render: (t) =>
+      h('a', { style: { color: '#38bdf8', cursor: 'pointer' }, onClick: () => emit('drill', t.code) }, t.code),
+  },
   { title: '建仓时间', key: 'open_time', render: (t) => t.open_time ?? '-' },
   { title: '建仓价', key: 'open_price', align: 'right', render: (t) => formatMoney(t.open_price) },
   { title: '清仓时间', key: 'close_time', render: (t) => t.close_time ?? '-' },

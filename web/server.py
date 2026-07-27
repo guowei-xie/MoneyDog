@@ -24,6 +24,7 @@ from utils.backtest_config import (
     get_config_path,
     set_backtest_config_override,
 )
+from utils.data import get_daily_bars
 from utils.logger import error, info
 from laboratory.analyze import (
     analyze_account_changes,
@@ -282,6 +283,40 @@ def _fmt_trade_date(value: Any) -> str:
     """将 trade_date（如 20250701 / '20250701'）格式化为 YYYY-MM-DD 显示串。"""
     s = str(value).replace("-", "")[:8]
     return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 and s.isdigit() else str(value)
+
+
+def _bars_to_json(df: pd.DataFrame, period: str) -> List[Dict[str, Any]]:
+    """
+    将 get_daily_bars 返回的单只 DataFrame 转为前端 K 线数组。
+
+    Args:
+        df: 行情 DataFrame，index 为 'YYYYMMDD'（日线）或 'YYYYMMDDHHMMSS'（分钟线）
+        period: '1d' 或 '1m'，决定 date 显示粒度
+
+    Returns:
+        list[dict]: [{date, open, high, low, close, volume}, ...]
+    """
+    if df is None or df.empty:
+        return []
+    bars: List[Dict[str, Any]] = []
+    for idx, row in df.iterrows():
+        s = str(idx)
+        date = (
+            f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+            if period == "1d"
+            else f"{s[:4]}-{s[4:6]}-{s[6:8]} {s[8:10]}:{s[10:12]}"
+        )
+        bars.append(
+            {
+                "date": date,
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            }
+        )
+    return bars
 
 
 def _build_account_summary(metrics: Dict[str, Any]) -> List[str]:
@@ -874,6 +909,59 @@ async def get_backtest_positions(run_id: str) -> JSONResponse:
     return JSONResponse({"positions": records})
 
 
+@app.get("/api/backtests/{run_id}/kline")
+async def get_backtest_kline(run_id: str, code: str) -> JSONResponse:
+    """
+    获取某只个股在本次回测区间的日线 K 线及买卖点标记（供逐笔钻取查看）。
+
+    Args:
+        run_id: 回测 ID
+        code: 股票代码（如 000001.SZ）
+
+    Returns:
+        JSONResponse: {code, period, bars:[{date,open,high,low,close,volume}],
+                       markers:[{date,time,action,price,volume,desc}]}
+    """
+    target = next((r for r in _load_run_index() if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+
+    start = target.backtest.backtest_start_time
+    end = target.backtest.backtest_end_time
+    try:
+        bars = get_daily_bars([code], period="1d", start_time=start, end_time=end, table_name="daily_1day")
+    except Exception as exc:  # noqa: BLE001
+        error(f"获取 K 线失败 code={code}: {exc}")
+        raise HTTPException(status_code=500, detail="获取 K 线数据失败") from exc
+    bars_json = _bars_to_json(bars.get(code), "1d")
+
+    # 买卖点：从原始成交记录按股票代码过滤
+    markers: List[Dict[str, Any]] = []
+    ot_file = target.files.get("original_transactions")
+    if ot_file:
+        ot_path = os.path.join(RESULTS_DIR, ot_file)
+        if os.path.exists(ot_path):
+            try:
+                otdf = pd.read_excel(ot_path)
+                sub = otdf[otdf["stock_code"] == code]
+                for _, row in sub.iterrows():
+                    ts = str(row.get("time_str", ""))
+                    markers.append(
+                        {
+                            "date": ts[:10],
+                            "time": ts,
+                            "action": str(row.get("action", "")),
+                            "price": float(row["price"]),
+                            "volume": int(row["volume"]),
+                            "desc": str(row.get("desc", "")),
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001
+                error(f"读取买卖点失败 code={code}: {exc}")
+
+    return JSONResponse({"code": code, "period": "1d", "bars": bars_json, "markers": markers})
+
+
 @app.get("/api/backtests/{run_id}/curve.json")
 async def get_backtest_curve_json(run_id: str) -> JSONResponse:
     """
@@ -1000,6 +1088,43 @@ async def get_backtest_code(run_id: str) -> JSONResponse:
             "code": content,
         },
     )
+
+
+@app.get("/api/market/bars")
+async def get_market_bars(
+    code: str,
+    period: str = "1d",
+    start: str = "",
+    end: str = "",
+    market: str = "stock",
+) -> JSONResponse:
+    """
+    获取个股/指数行情 K 线（供行情浏览与 K 线钻取共用）。
+
+    Args:
+        code: 代码（个股如 000001.SZ；指数如 000001.SH 且 market=index）
+        period: '1d' 或 '1m'
+        start/end: YYYYMMDD 起止（分钟线要求 start==end 单日，限制数据量）
+        market: 'stock'（默认）或 'index'
+
+    Returns:
+        JSONResponse: {code, period, bars:[{date,open,high,low,close,volume}]}
+    """
+    if period not in ("1d", "1m"):
+        raise HTTPException(status_code=422, detail="period 仅支持 1d 或 1m")
+    if period == "1m" and (not start or start != end):
+        raise HTTPException(status_code=422, detail="分钟线请指定同一天（start==end）以限制数据量")
+
+    if market == "index":
+        table = "index_daily"
+    else:
+        table = "daily_1day" if period == "1d" else "daily_1min"
+    try:
+        bars = get_daily_bars([code], period=period, start_time=start, end_time=end, table_name=table)
+    except Exception as exc:  # noqa: BLE001
+        error(f"获取行情失败 code={code}: {exc}")
+        raise HTTPException(status_code=500, detail="获取行情数据失败") from exc
+    return JSONResponse({"code": code, "period": period, "bars": _bars_to_json(bars.get(code), period)})
 
 
 # dist 未构建时的兜底提示页（保证纯 Python 环境也能启动并给出指引）
