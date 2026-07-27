@@ -1,9 +1,8 @@
 """
 模拟交易实现
 """
-import configparser
 from utils.logger import info, debug, error
-from utils.backtest_config import is_verbose_mode
+from utils.backtest_config import is_verbose_mode, get_cfg
 import pandas as pd
 from datetime import datetime
 from utils.util import time_str_to_datetime
@@ -16,10 +15,7 @@ class Broker:
         """
         初始化模拟撮合 Broker，每次实例化时按当前 config.ini 加载资金与费用配置。
         """
-        cfg = configparser.ConfigParser()
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        config_path = os.path.join(project_root, "config.ini")
-        cfg.read(config_path, encoding="utf-8")
+        cfg = get_cfg()  # 共享的 config.ini 解析（__file__ 定位，不依赖 CWD）
 
         # 账户初始资金及交易费用参数
         self.initial_amount = cfg.getfloat("BACKTEST", "initial_amount", fallback=100000.0)

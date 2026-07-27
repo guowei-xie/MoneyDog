@@ -8,7 +8,8 @@ import os
 import sys
 from datetime import datetime
 from typing import Optional
-import configparser
+
+from utils.backtest_config import get_log_level
 
 
 class Logger:
@@ -17,16 +18,14 @@ class Logger:
     提供统一的日志记录功能，支持多种输出方式和配置化管理
     """
     
-    def __init__(self, name: str = "", config_file: str = "config.ini"):
+    def __init__(self, name: str = ""):
         """
         初始化日志器
-        
+
         Args:
             name: 日志器名称
-            config_file: 配置文件路径
         """
         self.name = name
-        self.config_file = config_file
         self.logger = None
         self._setup_logger()
     
@@ -63,20 +62,16 @@ class Logger:
     
     def _get_log_level(self) -> int:
         """
-        从配置文件读取日志级别
-        
+        读取日志级别（经 backtest_config，基于 __file__ 定位 config.ini，避免依赖当前工作目录）。
+
         Returns:
             日志级别
         """
         try:
-            config = configparser.ConfigParser()
-            if os.path.exists(self.config_file):
-                config.read(self.config_file, encoding='utf-8')
-                level_str = config.get('LOGGING', 'level', fallback='INFO').upper()
-                return getattr(logging, level_str, logging.INFO)
+            level_str = get_log_level(fallback="INFO")
+            return getattr(logging, level_str, logging.INFO)
         except Exception as e:
             print(f"读取日志配置失败: {e}")
-        
         return logging.INFO
     
     def _setup_file_handler(self, formatter: logging.Formatter, log_level: int):

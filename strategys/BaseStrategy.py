@@ -4,7 +4,6 @@
 """
 import os
 import time
-import configparser
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Dict, List, Optional
@@ -20,7 +19,7 @@ from utils.data import (
 )
 from utils.logger import debug, info
 from utils.util import add_num_date_days, generate_minute_snapshot, get_elapsed_time_str
-from utils.backtest_config import refresh_backtest_config, is_verbose_mode
+from utils.backtest_config import refresh_backtest_config, is_verbose_mode, get_cfg
 from utils.broker import Broker
 from laboratory.analyze import analyze_account_changes, analyze_buy_and_sell_record
 
@@ -49,10 +48,7 @@ class BaseStrategy(ABC):
 
         # 每次实例化策略时重新读取配置，避免长生命周期进程中使用旧配置
         refresh_backtest_config()
-        cfg = configparser.ConfigParser()
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        config_path = os.path.join(project_root, "config.ini")
-        cfg.read(config_path, encoding="utf-8")
+        cfg = get_cfg()  # 共享的 config.ini 解析（__file__ 定位，不依赖 CWD）
 
         self.backtest_start_time = cfg.get("BACKTEST", "backtest_start_time", fallback="")
         self.backtest_end_time = cfg.get("BACKTEST", "backtest_end_time", fallback="")

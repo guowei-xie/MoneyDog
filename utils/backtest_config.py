@@ -19,15 +19,46 @@ def refresh_backtest_config() -> None:
     _cached_cfg = None
 
 
+def get_config_path() -> str:
+    """返回 config.ini 的绝对路径（基于本文件定位项目根，消除对当前工作目录的依赖）。"""
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(project_root, "config.ini")
+
+
 def _get_cfg() -> configparser.ConfigParser:
-    """读取并缓存 config.ini（解析一次，供本模块各读取函数共用）。"""
+    """读取并缓存 config.ini（解析一次，供本模块各读取函数与外部调用者共用）。"""
     global _cached_cfg
     if _cached_cfg is None:
         cfg = configparser.ConfigParser()
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        cfg.read(os.path.join(project_root, "config.ini"), encoding="utf-8")
+        cfg.read(get_config_path(), encoding="utf-8")
         _cached_cfg = cfg
     return _cached_cfg
+
+
+def get_cfg() -> configparser.ConfigParser:
+    """
+    返回共享的、已缓存的 config.ini 解析结果。
+
+    供 Broker / BaseStrategy 等复用，替代各处自建 configparser + 相对路径 read，
+    统一走 __file__ 定位的绝对路径，消除 CWD 依赖与重复解析。
+    """
+    return _get_cfg()
+
+
+def get_data_path() -> str:
+    """[DATA] data_path：DuckDB 数据库路径。"""
+    return _get_cfg().get("DATA", "data_path", fallback="")
+
+
+def get_log_level(fallback: str = "INFO") -> str:
+    """[LOGGING] level：日志级别（大写字符串）。"""
+    return _get_cfg().get("LOGGING", "level", fallback=fallback).upper()
+
+
+def get_strategy_target() -> Tuple[str, str]:
+    """[STRATEGY] (strategy_module, strategy_class)：待加载策略的模块名与类名。"""
+    cfg = _get_cfg()
+    return cfg.get("STRATEGY", "strategy_module"), cfg.get("STRATEGY", "strategy_class")
 
 
 def is_verbose_mode() -> bool:

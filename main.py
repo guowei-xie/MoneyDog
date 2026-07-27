@@ -2,9 +2,9 @@
 MoneyDog 主程序入口
 量化交易系统主程序
 """
-import configparser
 import importlib
 from utils.logger import info, error
+from utils.backtest_config import get_strategy_target
 
 
 def load_strategy():
@@ -13,12 +13,8 @@ def load_strategy():
     Returns:
         策略实例
     """
-    config = configparser.ConfigParser()
-    config.read('config.ini', encoding='utf-8')
-    
-    # 读取策略配置
-    strategy_module_name = config.get('STRATEGY', 'strategy_module')
-    strategy_class_name = config.get('STRATEGY', 'strategy_class')
+    # 策略模块名/类名统一经 backtest_config 读取（__file__ 定位项目根，不依赖 CWD）
+    strategy_module_name, strategy_class_name = get_strategy_target()
     
     try:
         # 动态导入策略模块

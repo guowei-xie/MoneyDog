@@ -1,17 +1,16 @@
 import os
 import duckdb
 import gc
-import configparser
+
+from utils.backtest_config import get_data_path
 
 class DuckDBHelper:
     def __init__(self):
         """
         初始化DuckDB连接
         """
-        config = configparser.ConfigParser()
-        with open('config.ini', 'r', encoding='utf-8') as f:
-            config.read_file(f)
-        self.db_path = config.get('DATA', 'data_path')
+        # DB 路径统一经 backtest_config 读取（__file__ 定位项目根），不再依赖当前工作目录
+        self.db_path = get_data_path()
 
         # 检查父目录是否存在，不存在则创建
         parent_dir = os.path.dirname(os.path.abspath(self.db_path))
