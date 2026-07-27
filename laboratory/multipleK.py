@@ -379,18 +379,17 @@ def get_ma5_bottom(daily_bars: pd.DataFrame, left_count: int = 5, right_count: i
     # 计算MA5的变化量（diff = MA5[t] - MA5[t-1]）
     ma5_diff = df['ma5'].diff()
     
-    # 检查左侧left_count天是否连续下跌（diff < 0）
+    # 检查左侧left_count天是否连续下跌（diff < 0）：窗口内全为 True 等价于布尔和==窗口长度
     # 对于T日，检查T-left_count到T-1这left_count天的diff是否都小于0
-    left_decreasing = (ma5_diff < 0).rolling(window=left_count, min_periods=left_count).apply(
-        lambda x: x.all() and not x.isna().any(), raw=False
+    left_decreasing = (
+        (ma5_diff < 0).rolling(window=left_count, min_periods=left_count).sum() == left_count
     ).shift(1)  # 对齐到T日
-    # rolling.apply 返回 float(0.0/1.0/NaN)，这里统一转成 bool，避免 bool & float 的 TypeError
     left_decreasing = left_decreasing.fillna(0).astype(bool)
-    
+
     # 检查右侧right_count天是否连续上涨（diff > 0）
     # 对于T日，检查T+1到T+right_count这right_count天的diff是否都大于0
-    right_increasing = (ma5_diff > 0).rolling(window=right_count, min_periods=right_count).apply(
-        lambda x: x.all() and not x.isna().any(), raw=False
+    right_increasing = (
+        (ma5_diff > 0).rolling(window=right_count, min_periods=right_count).sum() == right_count
     ).shift(-right_count)  # 对齐到T日
     right_increasing = right_increasing.fillna(0).astype(bool)
     
@@ -429,17 +428,17 @@ def get_ma5_top(daily_bars: pd.DataFrame, left_count: int = 5, right_count: int 
     # 计算MA5的变化量（diff = MA5[t] - MA5[t-1]）
     ma5_diff = df['ma5'].diff()
     
-    # 检查左侧left_count天是否连续上涨（diff > 0）
+    # 检查左侧left_count天是否连续上涨（diff > 0）：窗口内全为 True 等价于布尔和==窗口长度
     # 对于T日，检查T-left_count到T-1这left_count天的diff是否都大于0
-    left_increasing = (ma5_diff > 0).rolling(window=left_count, min_periods=left_count).apply(
-        lambda x: x.all() and not x.isna().any(), raw=False
+    left_increasing = (
+        (ma5_diff > 0).rolling(window=left_count, min_periods=left_count).sum() == left_count
     ).shift(1)  # 对齐到T日
     left_increasing = left_increasing.fillna(0).astype(bool)
-    
+
     # 检查右侧right_count天是否连续下跌（diff < 0）
     # 对于T日，检查T+1到T+right_count这right_count天的diff是否都小于0
-    right_decreasing = (ma5_diff < 0).rolling(window=right_count, min_periods=right_count).apply(
-        lambda x: x.all() and not x.isna().any(), raw=False
+    right_decreasing = (
+        (ma5_diff < 0).rolling(window=right_count, min_periods=right_count).sum() == right_count
     ).shift(-right_count)  # 对齐到T日
     right_decreasing = right_decreasing.fillna(0).astype(bool)
     

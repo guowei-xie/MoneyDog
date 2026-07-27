@@ -16,7 +16,7 @@ from strategys.BaseStrategy import BaseStrategy
 from utils.data import get_daily_bars, get_daily_bars_from_cache, has_index_1day_data
 from utils.util import convert_to_safe_sell_volume, add_num_date_days
 from laboratory.multipleK import get_macd, is_macd_top
-from laboratory.singleK import is_limit, get_limit_price
+from laboratory.singleK import is_limit, is_limit_series, get_limit_price
 from utils.logger import debug, warning
 
 
@@ -127,20 +127,15 @@ class BreakPrevHighLimitUp(BaseStrategy):
             amplitude = float(interval_slice["high"].max()) / interval_low - 1
             if amplitude > self.interval_max_amplitude_pct:
                 continue
-            # 近 interval_days 日不能有涨停
+            # 近 interval_days 日不能有涨停（向量化，preClose 为 NaN 的行自然为 False）
             recent = df.iloc[-self.interval_days:]
-            if any(
-                not pd.isna(row.get("preClose")) and is_limit(stock_code, row["close"], row["preClose"])
-                for _, row in recent.iterrows()
-            ):
+            recent_limit = is_limit_series(stock_code, recent["close"], recent["preClose"]) & recent["preClose"].notna()
+            if recent_limit.any():
                 continue
             # 近1年涨停次数不低于 min_limit_count（参考 N_Pattern_Breakout_V2）
             last_n = df.iloc[-self.limit_count_check_days:] if len(df) >= self.limit_count_check_days else df
-            limit_up_count = sum(
-                1 for _, row in last_n.iterrows()
-                if not pd.isna(row.get("preClose")) and is_limit(stock_code, row["close"], row["preClose"])
-            )
-            if limit_up_count < self.min_limit_count:
+            last_n_limit = is_limit_series(stock_code, last_n["close"], last_n["preClose"]) & last_n["preClose"].notna()
+            if int(last_n_limit.sum()) < self.min_limit_count:
                 continue
             result.append(stock_code)
         return result

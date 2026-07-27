@@ -3,6 +3,7 @@
 """
 
 from pickle import FALSE
+import pandas as pd
 from utils.util import get_stock_market_type
 
 def get_limit_percentage(stock_code: str) -> float:
@@ -38,13 +39,40 @@ def is_limit(stock_code: str, price: float, previous_close: float, limit_type: s
     """
     limit_percentage = get_limit_percentage(stock_code)
     if limit_type == 'up':
-        limit_price = previous_close * (1 + limit_percentage - tolerance) 
+        limit_price = previous_close * (1 + limit_percentage - tolerance)
         return price >= limit_price
     elif limit_type == 'down':
         limit_price = previous_close * (1 - limit_percentage + tolerance)
         return price <= limit_price
     else:
         return False
+
+
+def is_limit_series(stock_code, price, previous_close, limit_type: str = 'up', tolerance: float = 0.002):
+    """
+    is_limit 的向量化版本：对整列价格/前收盘价一次性判断涨跌停，避免逐行 iterrows。
+
+    与 is_limit 逐元素等价（同一 limit_percentage、同一比较式）。previous_close 为 NaN 时，
+    因与 NaN 比较恒为 False，结果自然为 False（与"跳过无前收盘价的行"一致）。
+
+    Args:
+        stock_code: 股票代码（决定涨跌停幅度）
+        price: 当前价格列（Series 或可转序列）
+        previous_close: 前一日收盘价列
+        limit_type: 'up' 涨停 / 'down' 跌停
+        tolerance: 误差范围
+    Returns:
+        pd.Series[bool]: 各行是否涨/跌停
+    """
+    price = pd.Series(price)
+    previous_close = pd.Series(previous_close)
+    limit_percentage = get_limit_percentage(stock_code)
+    if limit_type == 'up':
+        return price >= previous_close * (1 + limit_percentage - tolerance)
+    elif limit_type == 'down':
+        return price <= previous_close * (1 - limit_percentage + tolerance)
+    else:
+        return pd.Series(False, index=price.index)
 
 # 判断是否一字板
 def is_one_board(stock_code: str, price: float, previous_close: float, low: float, high: float, limit_type: str = 'up', tolerance: float = 0.002) -> bool:
