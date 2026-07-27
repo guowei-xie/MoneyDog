@@ -143,6 +143,28 @@ def get_data_coverage(code: str, market: str = "stock") -> dict:
     }
 
 
+def get_overall_coverage() -> dict:
+    """
+    获取 daily_1day 全表的整体覆盖（起止日期与交易日数），供总览仪表盘展示。
+
+    Returns:
+        dict: {"start": 'YYYY-MM-DD'|None, "end": 'YYYY-MM-DD'|None, "trade_days": int}
+    """
+    try:
+        sql = "SELECT min(time) AS mn, max(time) AS mx, count(DISTINCT time) AS d FROM daily_1day"
+        row = duckdb_helper.conn.execute(sql).df().iloc[0]
+    except Exception as e:
+        error(f"查询整体数据覆盖失败: {e}")
+        return {"start": None, "end": None, "trade_days": 0}
+    if pd.isna(row["mn"]):
+        return {"start": None, "end": None, "trade_days": 0}
+
+    def _to_date(ms) -> str:
+        return pd.to_datetime(int(ms), unit="ms", utc=True).tz_convert("Asia/Shanghai").strftime("%Y-%m-%d")
+
+    return {"start": _to_date(row["mn"]), "end": _to_date(row["mx"]), "trade_days": int(row["d"])}
+
+
 def get_stock_list_in_main_board() -> list:
     """
     获取沪深A股主板成分股

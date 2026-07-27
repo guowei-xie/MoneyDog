@@ -27,6 +27,7 @@ from utils.backtest_config import (
 from utils.data import (
     get_daily_bars,
     get_data_coverage,
+    get_overall_coverage,
     get_stock_list_in_sector,
     has_index_1day_data,
 )
@@ -1145,6 +1146,64 @@ _INDEX_CANDIDATES = {
 }
 
 
+def _run_brief(record: RunRecord) -> Dict[str, Any]:
+    """提取回测记录的总览简报字段。"""
+    m = record.metrics or {}
+    return {
+        "id": record.id,
+        "created_at": record.created_at,
+        "strategy_label": f"{record.strategy.strategy_module}.{record.strategy.strategy_class}",
+        "profit_rate": m.get("profit_rate"),
+        "max_drawdown": m.get("max_drawdown"),
+        "sharpe_ratio": m.get("sharpe_ratio"),
+    }
+
+
+@app.get("/api/dashboard")
+async def get_dashboard() -> JSONResponse:
+    """
+    总览仪表盘聚合：回测总数、运行态、最近回测、最优（夏普）回测、数据覆盖。
+
+    Returns:
+        JSONResponse: {total_runs, running, active_run_id, recent[], best_by_sharpe, data{...}}
+    """
+    global _STOCK_CODES_CACHE  # noqa: PLW0603
+    records = _load_run_index()
+    recent = [_run_brief(r) for r in reversed(records[-8:])]
+
+    # 夏普最高的回测（有 sharpe 指标者）
+    best = None
+    best_sharpe = None
+    for r in records:
+        s = (r.metrics or {}).get("sharpe_ratio")
+        if isinstance(s, (int, float)) and (best_sharpe is None or s > best_sharpe):
+            best_sharpe = s
+            best = _run_brief(r)
+
+    if not _STOCK_CODES_CACHE:
+        try:
+            _STOCK_CODES_CACHE = get_stock_list_in_sector("")
+        except Exception as exc:  # noqa: BLE001
+            error(f"获取股票列表失败: {exc}")
+
+    coverage = get_overall_coverage()
+    return JSONResponse(
+        {
+            "total_runs": len(records),
+            "running": bool(CURRENT_BACKTEST.get("run_id")),
+            "active_run_id": CURRENT_BACKTEST.get("run_id"),
+            "recent": recent,
+            "best_by_sharpe": best,
+            "data": {
+                "stock_count": len(_STOCK_CODES_CACHE),
+                "daily_start": coverage.get("start"),
+                "daily_end": coverage.get("end"),
+                "trade_days": coverage.get("trade_days"),
+            },
+        }
+    )
+
+
 @app.get("/api/market/stocks")
 async def list_market_stocks(q: str = "", limit: int = 50) -> JSONResponse:
     """
@@ -1251,10 +1310,7 @@ if __name__ == "__main__":
     # 允许直接通过 python -m web.server 启动开发服务器
     import uvicorn
 
-    uvicorn.run(
-        "web.server:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True,
-    )
+    # 不启用 reload：utils.data 在模块导入时即打开 DuckDB 连接，reload 的
+    # 监听子进程会二次导入并与主进程争抢同一数据库文件锁而启动失败。
+    uvicorn.run(app, host="127.0.0.1", port=8000)
 
