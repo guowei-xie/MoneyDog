@@ -19,6 +19,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from main import load_strategy
+from utils.backtest_config import (
+    clear_backtest_config_override,
+    get_config_path,
+    set_backtest_config_override,
+)
 from utils.logger import error, info
 from laboratory.analyze import (
     analyze_account_changes,
@@ -46,10 +51,23 @@ FRONTEND_DIST = os.path.join(BASE_DIR, "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
 FRONTEND_ASSETS = os.path.join(FRONTEND_DIST, "assets")
 
-# 当前正在后台运行的回测任务信息（用于中止回测）
+# 当前正在后台运行的回测任务信息（用于中止回测与运行态恢复）
+# run_id 一旦置位即视为“运行中”；strategy 由后台线程注入，供中止使用。
 CURRENT_BACKTEST: Dict[str, Any] = {
     "run_id": None,
     "strategy": None,
+    "strategy_label": None,
+    "started_at": None,
+    "backtest_period": None,
+}
+
+# 保证「检查是否有回测在跑 + 占位」原子化，避免并发提交竞态
+_RUN_LOCK = threading.Lock()
+
+# 最近一次结束的回测信息，供前端在刷新/轮询时从 running -> finished 自动跳转结果页
+LAST_FINISHED: Dict[str, Any] = {
+    "run_id": None,
+    "status": None,  # success/failed/stopped
 }
 
 # 当前回测进度信息（供前端查询进度展示）
@@ -60,6 +78,17 @@ BACKTEST_PROGRESS: Dict[str, Any] = {
     "total": 0,
     "percent": 0.0,
 }
+
+
+def _reset_current_backtest() -> None:
+    """清空当前运行信息（回测结束后调用）。"""
+    CURRENT_BACKTEST.update(
+        run_id=None,
+        strategy=None,
+        strategy_label=None,
+        started_at=None,
+        backtest_period=None,
+    )
 
 
 def _ensure_results_dir() -> None:
@@ -353,7 +382,7 @@ async def get_current_config() -> JSONResponse:
         JSONResponse: 包含 strategy 与 backtest 两部分配置
     """
     cfg = configparser.ConfigParser()
-    cfg.read(os.path.join(PROJECT_ROOT, "config.ini"), encoding="utf-8")
+    cfg.read(get_config_path(), encoding="utf-8")
 
     strategy_cfg = StrategyConfig(
         strategy_module=cfg.get("STRATEGY", "strategy_module", fallback=""),
@@ -383,65 +412,52 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
     Returns:
         JSONResponse: {\"run_id\": str, \"status\": \"running\"}
     """
-    config_path = os.path.join(PROJECT_ROOT, "config.ini")
-    cfg = configparser.ConfigParser()
-    cfg.read(config_path, encoding="utf-8")
-
-    # 更新策略配置
-    if not cfg.has_section("STRATEGY"):
-        cfg.add_section("STRATEGY")
-    cfg.set("STRATEGY", "strategy_module", payload.strategy.strategy_module)
-    cfg.set("STRATEGY", "strategy_class", payload.strategy.strategy_class)
-
-    # 更新回测配置
-    if not cfg.has_section("BACKTEST"):
-        cfg.add_section("BACKTEST")
     bt = payload.backtest
-    cfg.set("BACKTEST", "backtest_start_time", bt.backtest_start_time)
-    cfg.set("BACKTEST", "backtest_end_time", bt.backtest_end_time)
-    cfg.set("BACKTEST", "initial_amount", str(bt.initial_amount))
-    cfg.set("BACKTEST", "commission_rate", str(bt.commission_rate))
-    cfg.set("BACKTEST", "min_commission", str(bt.min_commission))
-    cfg.set("BACKTEST", "tax_rate", str(bt.tax_rate))
-    cfg.set("BACKTEST", "limit_vol_type", bt.limit_vol_type)
-    cfg.set("BACKTEST", "max_vol_rate", str(bt.max_vol_rate))
-    cfg.set("BACKTEST", "max_vol_amount", str(bt.max_vol_amount))
-    cfg.set(
-        "BACKTEST",
-        "batch_stock_selection_use_threads",
-        str(bt.batch_stock_selection_use_threads).lower(),
-    )
-    cfg.set(
-        "BACKTEST",
-        "batch_stock_selection_threads",
-        str(bt.batch_stock_selection_threads),
-    )
 
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            cfg.write(f)
-    except Exception as exc:  # noqa: BLE001
-        error(f"写入配置文件失败: {exc}")
-        raise HTTPException(status_code=500, detail="保存配置失败") from exc
+    # 以磁盘 config.ini 为底，仅在内存中覆盖本次回测字段；不落盘，避免污染用户配置。
+    mem_cfg = configparser.ConfigParser()
+    mem_cfg.read(get_config_path(), encoding="utf-8")
+    if not mem_cfg.has_section("STRATEGY"):
+        mem_cfg.add_section("STRATEGY")
+    mem_cfg.set("STRATEGY", "strategy_module", payload.strategy.strategy_module)
+    mem_cfg.set("STRATEGY", "strategy_class", payload.strategy.strategy_class)
+    if not mem_cfg.has_section("BACKTEST"):
+        mem_cfg.add_section("BACKTEST")
+    # 字段名与 config.ini 键一一对应，逐项写入；bool 需转小写以匹配 configparser 语义。
+    for key, value in bt.model_dump().items():
+        mem_cfg.set("BACKTEST", key, str(value).lower() if isinstance(value, bool) else str(value))
+
+    strategy_label = f"{payload.strategy.strategy_module}.{payload.strategy.strategy_class}"
+    period = f"{bt.backtest_start_time}-{bt.backtest_end_time}"
+
+    # 原子占位：单回测槽位，已有运行则拒绝（409），避免并发提交竞态与内存配置串扰。
+    with _RUN_LOCK:
+        if CURRENT_BACKTEST.get("run_id"):
+            raise HTTPException(status_code=409, detail="已有回测正在运行，请等待其结束或先中止")
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        CURRENT_BACKTEST.update(
+            run_id=run_id,
+            strategy=None,
+            strategy_label=strategy_label,
+            started_at=datetime.now().isoformat(timespec="seconds"),
+            backtest_period=period,
+        )
 
     # 记录回测前的结果文件快照
     before_snapshot = _snapshot_results_files()
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     def _run_task() -> None:
         """
-        后台线程实际执行回测任务：运行策略、分析结果并写入索引。
+        后台线程实际执行回测任务：安装内存配置、运行策略、分析结果并写入索引。
         """
-        global CURRENT_BACKTEST  # noqa: PLW0603
         strategy_code_filename: Optional[str] = None
-        info(
-            f"Web 后台回测开始，run_id={run_id}, "
-            f"strategy={payload.strategy.strategy_module}.{payload.strategy.strategy_class}, "
-            f"period={bt.backtest_start_time}-{bt.backtest_end_time}",
-        )
+        info(f"Web 后台回测开始，run_id={run_id}, strategy={strategy_label}, period={period}")
         start_ts = time.time()
         strategy = None
+        status = "failed"
         try:
+            # 安装内存覆盖配置（不落盘），驱动本次 load_strategy / run
+            set_backtest_config_override(mem_cfg)
             strategy = load_strategy()
             # 为当前策略注入进度回调，用于 Web 前端展示回测/选股进度
             if hasattr(strategy, "set_progress_callback"):
@@ -487,7 +503,7 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
                     )
             except Exception as exc:  # noqa: BLE001
                 error(f"保存策略源码快照失败: {exc}")
-            CURRENT_BACKTEST = {"run_id": run_id, "strategy": strategy}
+            CURRENT_BACKTEST["strategy"] = strategy
             # 重置并初始化进度信息
             BACKTEST_PROGRESS["run_id"] = run_id
             BACKTEST_PROGRESS["stage"] = "selection"
@@ -495,13 +511,19 @@ async def run_backtest(payload: RunBacktestRequest) -> JSONResponse:
             BACKTEST_PROGRESS["total"] = 0
             BACKTEST_PROGRESS["percent"] = 0.0
             strategy.run()
+            status = "success"
         except Exception as exc:  # noqa: BLE001
             error(f"Web 后台回测失败: {exc}")
         finally:
             elapsed = time.time() - start_ts
-            info(f"Web 后台回测结束，耗时 {elapsed:.2f} 秒，run_id={run_id}")
-            # 清理当前运行状态
-            CURRENT_BACKTEST = {"run_id": None, "strategy": None}
+            # 优雅中止会让 run() 正常返回，据策略停止标记归类为 stopped
+            if status == "success" and getattr(strategy, "_stop_requested", False):
+                status = "stopped"
+            info(f"Web 后台回测结束，耗时 {elapsed:.2f} 秒，run_id={run_id}，status={status}")
+            # 卸载内存配置覆盖，恢复从 config.ini 读取；清理运行槽位并记录结束态
+            clear_backtest_config_override()
+            _reset_current_backtest()
+            LAST_FINISHED.update(run_id=run_id, status=status)
             # 回测结束后若进度尚未到 100%，则补齐为 100%
             if BACKTEST_PROGRESS.get("run_id") == run_id:
                 BACKTEST_PROGRESS["stage"] = "backtest"
@@ -621,6 +643,13 @@ async def get_current_backtest_status() -> JSONResponse:
             "current": progress_current,
             "total": progress_total,
             "percent": progress_percent,
+            # 运行态恢复用元信息（刷新页面后据此重建“运行中”视图）
+            "strategy_label": current.get("strategy_label"),
+            "started_at": current.get("started_at"),
+            "backtest_period": current.get("backtest_period"),
+            # 最近结束的回测，供前端从 running -> finished 自动跳转结果页
+            "last_finished_run_id": LAST_FINISHED.get("run_id"),
+            "last_status": LAST_FINISHED.get("status"),
         },
     )
 
@@ -668,6 +697,23 @@ async def delete_backtest(run_id: str) -> JSONResponse:
     _save_run_index(remaining)
     info(f"已从索引中删除回测记录: run_id={run_id}")
     return JSONResponse({"success": True, "run_id": run_id})
+
+
+@app.get("/api/backtests/{run_id}", response_model=RunRecord)
+async def get_backtest(run_id: str) -> RunRecord:
+    """
+    获取单条回测记录（供结果页深链加载，避免拉取整个历史列表）。
+
+    Args:
+        run_id: 回测 ID
+
+    Returns:
+        RunRecord: 对应回测记录
+    """
+    target = next((r for r in _load_run_index() if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+    return target
 
 
 @app.get("/api/backtests/{run_id}/metrics")

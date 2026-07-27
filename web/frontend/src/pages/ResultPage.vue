@@ -1,12 +1,95 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { NCard, NText } from 'naive-ui'
+import { NCard, NSpace, NButton, NSpin, NAlert, NEmpty, NText } from 'naive-ui'
+import MetricsCards from '@/components/MetricsCards.vue'
+import CodeModal from '@/components/CodeModal.vue'
+import { useHistoryStore } from '@/stores/history'
+import { getBacktest, getMetrics, recordUrl } from '@/api/backtests'
+import { extractError } from '@/api/client'
+import { formatPeriod, formatStrategyLabel } from '@/utils/format'
+import type { MetricsDict, RunRecord } from '@/types/backtest'
 
 const route = useRoute()
+const history = useHistoryStore()
+const runId = computed(() => String(route.params.id))
+
+const loading = ref(true)
+const errorMsg = ref('')
+const record = ref<RunRecord | null>(null)
+const metrics = ref<MetricsDict | null>(null)
+const codeModal = ref<InstanceType<typeof CodeModal> | null>(null)
+
+async function load() {
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    // 命中历史缓存则复用，否则按 id 精确拉取单条记录（深链/刷新场景）。
+    record.value = history.find(runId.value) ?? (await getBacktest(runId.value))
+    metrics.value = record.value.metrics ?? (await getMetrics(runId.value))
+  } catch (err) {
+    errorMsg.value = extractError(err)
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(load)
 </script>
 
 <template>
-  <NCard :title="`回测结果 · ${route.params.id}`">
-    <NText depth="3">结果详情（指标 / 曲线 / 交易表）将在 P2–P5 阶段实现。</NText>
-  </NCard>
+  <NSpin :show="loading">
+    <NAlert v-if="errorMsg" type="error" title="加载失败">{{ errorMsg }}</NAlert>
+    <NSpace v-else vertical :size="16">
+      <NCard :title="`回测结果 · ${runId}`">
+        <template #header-extra>
+          <NSpace>
+            <NButton
+              size="small"
+              @click="codeModal?.open(runId, record?.strategy.strategy_class ?? '')"
+            >
+              查看策略代码
+            </NButton>
+            <NButton size="small" tag="a" :href="recordUrl(runId)" target="_blank">下载记录 Excel</NButton>
+          </NSpace>
+        </template>
+        <NText v-if="record" depth="3">
+          {{ formatStrategyLabel(record.strategy) }} · {{ formatPeriod(record.backtest) }} ·
+          {{ record.created_at }}
+        </NText>
+        <div style="margin-top: 16px">
+          <MetricsCards :metrics="metrics" />
+        </div>
+      </NCard>
+
+      <NCard title="分析摘要">
+        <NSpace :size="24" style="width: 100%" :wrap="true">
+          <div style="flex: 1; min-width: 280px">
+            <NText depth="3" style="font-size: 12px">账户分析</NText>
+            <pre class="summary-pre">{{ (record?.summary?.account ?? []).join('\n') || '暂无账户分析摘要。' }}</pre>
+          </div>
+          <div style="flex: 1; min-width: 280px">
+            <NText depth="3" style="font-size: 12px">个股分析</NText>
+            <pre class="summary-pre">{{ (record?.summary?.stock ?? []).join('\n') || '暂无个股分析摘要。' }}</pre>
+          </div>
+        </NSpace>
+      </NCard>
+
+      <NEmpty v-if="!record" description="无数据" />
+    </NSpace>
+    <CodeModal ref="codeModal" />
+  </NSpin>
 </template>
+
+<style scoped>
+.summary-pre {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+</style>

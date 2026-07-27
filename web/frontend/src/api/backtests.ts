@@ -28,6 +28,11 @@ export async function listBacktests(): Promise<RunRecord[]> {
   return data
 }
 
+export async function getBacktest(runId: string): Promise<RunRecord> {
+  const { data } = await client.get<RunRecord>(`/backtests/${encodeURIComponent(runId)}`)
+  return data
+}
+
 export async function getStatus(): Promise<RunStatus> {
   const { data } = await client.get<RunStatus>('/backtests/status')
   return data

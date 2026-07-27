@@ -9,14 +9,33 @@ from typing import Optional, Tuple
 
 # 缓存：策略初始化时会 refresh，Broker / 策略 / 分析模块共用同一份
 _cached_cfg: Optional[configparser.ConfigParser] = None
+# 内存覆盖配置：一旦安装则所有读取优先使用它、不落盘，且不被无参 refresh 清除。
+# 用于 Web「仅本次运行」——用请求参数构造内存配置驱动本次回测，而不改写磁盘 config.ini。
+# 注意：本模块不提供并发保护，其单实例安全性依赖 web/server.py 的单回测槽位（_RUN_LOCK + 409 守卫）。
+_override_cfg: Optional[configparser.ConfigParser] = None
 
 
 def refresh_backtest_config() -> None:
     """
     刷新回测配置缓存（在每次策略实例化时调用，保证长生命周期进程使用最新配置）。
+
+    仅清空磁盘解析缓存，下次从 config.ini 重新读取；不影响已安装的内存覆盖配置，
+    因此 Web「仅本次运行」期间策略实例化时的 refresh 不会丢弃本次回测的内存配置。
     """
     global _cached_cfg
     _cached_cfg = None
+
+
+def set_backtest_config_override(cfg: configparser.ConfigParser) -> None:
+    """安装内存覆盖配置：后续读取一律使用它、不落盘（Web「仅本次运行」入口）。"""
+    global _override_cfg
+    _override_cfg = cfg
+
+
+def clear_backtest_config_override() -> None:
+    """清除内存覆盖配置，恢复从 config.ini 读取（Web 回测结束后调用）。"""
+    global _override_cfg
+    _override_cfg = None
 
 
 def get_config_path() -> str:
@@ -26,8 +45,10 @@ def get_config_path() -> str:
 
 
 def _get_cfg() -> configparser.ConfigParser:
-    """读取并缓存 config.ini（解析一次，供本模块各读取函数与外部调用者共用）。"""
+    """读取配置：内存覆盖配置优先；否则读取并缓存 config.ini（解析一次，共用）。"""
     global _cached_cfg
+    if _override_cfg is not None:
+        return _override_cfg
     if _cached_cfg is None:
         cfg = configparser.ConfigParser()
         cfg.read(get_config_path(), encoding="utf-8")

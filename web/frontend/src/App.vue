@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, h } from 'vue'
+import { computed, h, onMounted } from 'vue'
 import { RouterView, RouterLink, useRoute } from 'vue-router'
+import { useRunStore } from '@/stores/run'
 import {
   NConfigProvider,
   NGlobalStyle,
@@ -16,6 +17,10 @@ import {
 } from 'naive-ui'
 
 const route = useRoute()
+
+// 应用启动时恢复运行态：若有回测正在运行，重建进度视图并恢复轮询。
+const run = useRunStore()
+onMounted(() => run.init())
 
 // 左侧导航：对应 6 大功能区（回测结果为动态路由，不单列菜单项）。
 const menuOptions: MenuOption[] = [
