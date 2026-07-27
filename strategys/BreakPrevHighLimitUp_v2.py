@@ -3,6 +3,10 @@
 选股：近90日实体最高价（max(开,收)）的 -10% 阈值，当前收盘价需大于该阈值。
 买入：涨幅接近涨停 + 当日最低或昨日收盘低于前高 + 当前价高于前高。
 卖出：当前涨停不卖；炸板立即清仓；否则按 MACD 首个顶/顶背离 分批卖出。
+
+⚠️ 未来函数说明：类属性 use_lookahead_shrink 默认 False（不使用任何未来数据）。
+   置 True 时，选股会借用 T+1 日内最高价缩池（见 _shrink_pool_by_future），
+   引入 look-ahead bias，回测结果显著虚高，仅供研究性对照，不可用于实盘评估。
 """
 import pandas as pd
 from typing import List, Dict, Optional
@@ -13,7 +17,7 @@ from utils.data import get_daily_bars, get_daily_bars_from_cache, has_index_1day
 from utils.util import convert_to_safe_sell_volume, add_num_date_days
 from laboratory.multipleK import get_macd, is_macd_top
 from laboratory.singleK import is_limit, get_limit_price
-from utils.logger import debug
+from utils.logger import debug, warning
 
 
 class BreakPrevHighLimitUp(BaseStrategy):
@@ -46,6 +50,11 @@ class BreakPrevHighLimitUp(BaseStrategy):
         self.min_limit_count = 1
         # 买入：仅在此时间窗内允许买入，用分时 bars 数量判断；第 90 根即 11:00（9:30 起算）
         self.buy_max_bars = 90
+        # ⚠️ 未来函数开关：选股是否借用 T+1 日内最高价缩池（见 _shrink_pool_by_future）。
+        # 默认 False（不使用未来数据，可用于实盘评估）。置 True 仅用于研究性对照，
+        # 会引入 look-ahead bias，回测结果显著虚高、不可用于实盘评估。
+        self.use_lookahead_shrink = False
+        self._lookahead_warned = False  # 未来函数告警去重（仅首次选股时提示一次）
         # 指数闸门：中证1000（默认 000852.SH），用于盘前预选“总闸门”
         self.csi1000_index_code = "000852.SH"
         # 指数闸门缓存：避免多线程选股阶段并发读 DuckDB，并避免反复重算 MACD
@@ -60,8 +69,9 @@ class BreakPrevHighLimitUp(BaseStrategy):
     def get_selected_stock_list(self, trade_date: str) -> List[str]:
         """
         获取自选股票列表（预买入）
-        先借未来函数用 T+1 日最高涨幅缩池，再仅对缩池结果取 90 日线做实体前高筛选，减少行情数据量与内存占用。
-        条件1（未来函数，仅用于缩池）：T+1 交易日最高涨幅 >= limit_near_pct，与买入“接近涨停”阈值一致。
+        默认对全市场股票池直接做实体前高等筛选；仅当 use_lookahead_shrink=True 时，
+        才先借未来函数用 T+1 日最高涨幅缩池（研究性对照，见 _shrink_pool_by_future）。
+        条件1（可选，仅 use_lookahead_shrink=True）：T+1 交易日最高涨幅 >= limit_near_pct（未来函数）。
         条件2：当前交易日收盘价 > 近 lookback_days 日实体最高价 * (1 - margin_pct)，且 T 日收盘价不能高于前高价；近90日最高价不含 T 日。
         条件3：T~T-n 日区间振幅不能大于 interval_max_amplitude_pct（n=interval_days），振幅=区间最高价/最低价-1。
         条件4：近 interval_days 个交易日不能有涨停。
@@ -76,42 +86,24 @@ class BreakPrevHighLimitUp(BaseStrategy):
         if not self._pass_csi1000_macd_gate(trade_date):
             return []
 
-        next_trade_day = add_num_date_days(trade_date, 1, self.trade_calendar)
-        # 1. 仅取 T+1 的 2 根 K 线（全市场），筛选出 T+1 最高涨幅 >= limit_near_pct 的股票，缩小后续取数范围
-        if self._daily_bars_cache is not None:
-            next_bars = get_daily_bars_from_cache(
-                self._daily_bars_cache, self.global_stock_list, next_trade_day, 2
-            )
+        # 1. 候选池：默认使用全市场股票池；仅当显式开启未来函数时才借 T+1 缩池（研究性对照）
+        if self.use_lookahead_shrink:
+            self._warn_lookahead_once()
+            candidate_pool = self._shrink_pool_by_future(trade_date)
+            if not candidate_pool:
+                return []
         else:
-            next_bars = get_daily_bars(
-                self.global_stock_list,
-                "1d",
-                start_time="",
-                end_time=next_trade_day,
-                count=2,
-            )
-        t1_candidates = []
-        for stock_code, df in next_bars.items():
-            if df is None or df.empty or len(df) < 2:
-                continue
-            prev_close = float(df.iloc[-2]["close"])
-            next_high = float(df.iloc[-1]["high"])
-            if prev_close <= 0:
-                continue
-            if (next_high - prev_close) / prev_close >= self.limit_near_pct:
-                t1_candidates.append(stock_code)
-        if not t1_candidates:
-            return []
+            candidate_pool = self.global_stock_list
 
         # 2. 取日线（需覆盖区间振幅与近1年涨停统计），再做实体前高与涨停相关筛选
         bars_count = max(self.lookback_days, self.limit_count_check_days)
         if self._daily_bars_cache is not None:
             daily_bars = get_daily_bars_from_cache(
-                self._daily_bars_cache, t1_candidates, trade_date, bars_count
+                self._daily_bars_cache, candidate_pool, trade_date, bars_count
             )
         else:
             daily_bars = get_daily_bars(
-                t1_candidates, "1d", start_time="", end_time=trade_date, count=bars_count
+                candidate_pool, "1d", start_time="", end_time=trade_date, count=bars_count
             )
         result = []
         min_bars = max(2, self.interval_days + 1)
@@ -152,6 +144,49 @@ class BreakPrevHighLimitUp(BaseStrategy):
                 continue
             result.append(stock_code)
         return result
+
+    def _warn_lookahead_once(self) -> None:
+        """首次选股时醒目提示：已启用未来函数缩池，回测结果不可用于实盘评估。"""
+        if not self._lookahead_warned:
+            warning(
+                "⚠️ 已启用未来函数缩池 use_lookahead_shrink=True："
+                "选股借用了 T+1 日内最高价（look-ahead bias），"
+                "回测结果显著虚高，仅供研究性对照，不可用于实盘评估！"
+            )
+            self._lookahead_warned = True
+
+    def _shrink_pool_by_future(self, trade_date: str) -> List[str]:
+        """
+        【未来函数，仅研究性对照】用 T+1 日内最高涨幅缩小候选池。
+
+        取 T+1 的 2 根日线，保留 (T+1最高价/T收盘价 - 1) >= limit_near_pct 的股票。
+        该值在 T+1 开盘买入时不可知，会引入 look-ahead bias；仅在 use_lookahead_shrink=True 时调用。
+
+        Args:
+            trade_date: 选股基准日 T。
+        Returns:
+            List[str]: 缩池后的候选股票代码。
+        """
+        next_trade_day = add_num_date_days(trade_date, 1, self.trade_calendar)
+        if self._daily_bars_cache is not None:
+            next_bars = get_daily_bars_from_cache(
+                self._daily_bars_cache, self.global_stock_list, next_trade_day, 2
+            )
+        else:
+            next_bars = get_daily_bars(
+                self.global_stock_list, "1d", start_time="", end_time=next_trade_day, count=2
+            )
+        candidates: List[str] = []
+        for stock_code, df in next_bars.items():
+            if df is None or df.empty or len(df) < 2:
+                continue
+            prev_close = float(df.iloc[-2]["close"])
+            next_high = float(df.iloc[-1]["high"])
+            if prev_close <= 0:
+                continue
+            if (next_high - prev_close) / prev_close >= self.limit_near_pct:
+                candidates.append(stock_code)
+        return candidates
 
     def _pass_csi1000_macd_gate(self, trade_date: str) -> bool:
         """
