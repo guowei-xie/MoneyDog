@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from strategys.BaseStrategy import BaseStrategy
-from utils.data import get_daily_bars
+from utils.data import get_daily_bars, get_daily_bars_from_cache
 from utils.logger import debug
 from utils.util import add_num_date_days, convert_to_safe_sell_volume
 from utils.volume_ratio import compute_volume_ratio_daily
@@ -87,9 +87,15 @@ class VolumePercentileTop2Strategy(BaseStrategy):
         stock_list = self.selected_stock_list + self.holding_stock_list
         if not stock_list:
             return True
-        daily_bars = get_daily_bars(
-            stock_list, "1d", start_time="", end_time=trade_date, count=2
-        )
+        # pre_close 取 T 日收盘：优先从已加载的日线内存缓存切片，避免每个交易日重复查 DuckDB
+        if self._daily_bars_cache is not None:
+            daily_bars = get_daily_bars_from_cache(
+                self._daily_bars_cache, stock_list, trade_date, 2
+            )
+        else:
+            daily_bars = get_daily_bars(
+                stock_list, "1d", start_time="", end_time=trade_date, count=2
+            )
         for stock_code in stock_list:
             df = daily_bars.get(stock_code)
             if df is not None and not df.empty:
