@@ -120,22 +120,29 @@ def _safe_hold_days(close_date8: str, build_date8: str, trade_calendar: list):
         return np.nan
 
 
-def _get_last_close(code: str, start_time: str, end_time: str):
+def _get_last_closes(codes: list, start_time: str, end_time: str) -> dict:
     """
-    取某股票在 [start_time, end_time] 区间内最后一个交易日的收盘价及日期，用于期末未平仓持仓的市值估算。
+    批量取多只股票在 [start_time, end_time] 内最后一个交易日的收盘价及日期，用于期末未平仓市值估算。
+
+    一次查询覆盖全部 codes（替代逐仓查库的 N 次往返）。因返回的是各股票 <= end_time 的
+    最近一根日线，与按各自建仓日为下界逐仓取"最后一根"结果一致（建仓当日必有日线，故最近一根相同）。
+
     Returns:
-        tuple: (last_close 收盘价, last_date8 'YYYYMMDD')；无数据或失败返回 (None, None)
+        dict: {code: (last_close 收盘价, last_date8 'YYYYMMDD')}；无数据的 code 不在字典中。
     """
+    result: dict = {}
+    if not codes:
+        return result
     try:
         bars = get_daily_bars(
-            stock_list=[code], period="1d", start_time=start_time, end_time=end_time, count=-1
+            stock_list=list(codes), period="1d", start_time=start_time, end_time=end_time, count=1
         )
-        bdf = bars.get(code)
-        if bdf is not None and not bdf.empty and "close" in bdf.columns:
-            return float(bdf["close"].iloc[-1]), str(bdf.index[-1])
+        for code, bdf in bars.items():
+            if bdf is not None and not bdf.empty and "close" in bdf.columns:
+                result[code] = (float(bdf["close"].iloc[-1]), str(bdf.index[-1]))
     except Exception as e:
-        info(f"未平仓市值估算：{code} 取价失败 ({e})")
-    return None, None
+        info(f"未平仓市值估算：批量取价失败 ({e})")
+    return result
 
 
 def minute_k_count_to_time(k_count: int) -> str:
@@ -557,6 +564,9 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
 
     df = df.sort_values(["stock_code", "time"])
 
+    # 期末未平仓估值所需的各股票最新收盘价：一次性批量取（替代逐仓查库的 N 次往返）
+    last_closes = _get_last_closes(df["stock_code"].unique().tolist(), start_time, calendar_end)
+
     records = []
     unclosed_marked = 0   # 期末未平仓、已按市值估算并计入的交易数
     unclosed_dropped = 0  # 期末未平仓、因取不到估值价而丢弃的交易数
@@ -606,7 +616,7 @@ def analyze_buy_and_sell_record(transactions: list = None, file_path: str = "") 
             else:
                 # 期末未平仓：剩余持仓按回测截止日的收盘价市值估算，不再静默丢弃（避免美化评价）
                 remaining = buy_shares - sell_shares
-                last_close, last_date8 = _get_last_close(code, str(build_t)[:8], calendar_end)
+                last_close, last_date8 = last_closes.get(code, (None, None))
                 if last_close is None:
                     unclosed_dropped += 1
                     info(f"未平仓交易：{code} 无法取得期末估值价，已丢弃（剩余 {remaining} 股）")
