@@ -2,10 +2,12 @@ import client from './client'
 import type {
   AppConfig,
   CurveSeries,
+  PositionRow,
   RunBacktestRequest,
   RunRecord,
   RunStatus,
   StrategyInfo,
+  Trade,
   MetricsDict,
 } from '@/types/backtest'
 
@@ -57,6 +59,18 @@ export async function getMetrics(runId: string): Promise<MetricsDict> {
 export async function getCurve(runId: string): Promise<CurveSeries> {
   const { data } = await client.get<CurveSeries>(`/backtests/${encodeURIComponent(runId)}/curve.json`)
   return data
+}
+
+export async function getTrades(runId: string): Promise<Trade[]> {
+  const { data } = await client.get<{ trades: Trade[] }>(`/backtests/${encodeURIComponent(runId)}/trades`)
+  return data.trades
+}
+
+export async function getPositions(runId: string): Promise<PositionRow[]> {
+  const { data } = await client.get<{ positions: PositionRow[] }>(
+    `/backtests/${encodeURIComponent(runId)}/positions`,
+  )
+  return data.positions
 }
 
 export async function getCode(runId: string): Promise<{ file_name: string; code: string }> {

@@ -56,6 +56,31 @@ export interface CurveSeries {
   initial_amount: number
 }
 
+export interface Trade {
+  code: string
+  open_time: string | null
+  open_price: number | null
+  close_time: string | null
+  close_price: number | null
+  net_pct: number | null
+  gross_pct: number | null
+  closed: boolean
+  hold_days: number | null
+  commission: number | null
+  tax: number | null
+  cost: number | null
+  remark: string | null
+}
+
+export interface PositionRow {
+  trade_date: string
+  stock_count: number
+  stock_cost: number
+  stock_value: number
+  available_amount: number
+  total_assets: number
+}
+
 export interface RunStatus {
   running: boolean
   run_id: string | null

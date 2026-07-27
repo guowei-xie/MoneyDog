@@ -231,6 +231,59 @@ def _extract_metrics_from_df(df: pd.DataFrame) -> Dict[str, Any]:
     return result
 
 
+# analyze_transactions Excel 中文列 -> 前端稳定英文键
+_TRADE_COL_MAP = {
+    "股票代码": "code",
+    "建仓时间": "open_time",
+    "建仓价格": "open_price",
+    "清仓时间": "close_time",
+    "清仓价格": "close_price",
+    "涨跌幅": "net_pct",
+    "毛涨跌幅": "gross_pct",
+    "是否平仓": "closed",
+    "持仓天数": "hold_days",
+    "总手续费": "commission",
+    "总印花税": "tax",
+    "总成本": "cost",
+    "备注": "remark",
+}
+
+
+def _json_safe_records(df: pd.DataFrame, rename: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """
+    将 DataFrame 转为 JSON 安全的记录列表：numpy 类型转原生、NaN 转 None、时间转 ISO。
+
+    Args:
+        df: 源 DataFrame
+        rename: 可选列名映射（中文列 -> 英文键）
+
+    Returns:
+        list[dict]: 每行一条记录
+    """
+    if df is None or df.empty:
+        return []
+    if rename:
+        df = df.rename(columns=rename)
+    records: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        rec: Dict[str, Any] = {}
+        for key, value in row.items():
+            if isinstance(value, (pd.Timestamp, datetime)):
+                rec[key] = value.isoformat()
+                continue
+            if hasattr(value, "item"):
+                value = value.item()
+            rec[key] = None if isinstance(value, float) and pd.isna(value) else value
+        records.append(rec)
+    return records
+
+
+def _fmt_trade_date(value: Any) -> str:
+    """将 trade_date（如 20250701 / '20250701'）格式化为 YYYY-MM-DD 显示串。"""
+    s = str(value).replace("-", "")[:8]
+    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 and s.isdigit() else str(value)
+
+
 def _build_account_summary(metrics: Dict[str, Any]) -> List[str]:
     """
     构造账户分析结果摘要文本列表，格式与日志输出保持一致。
@@ -761,6 +814,64 @@ async def get_backtest_metrics(run_id: str) -> JSONResponse:
     _save_run_index(records)
 
     return JSONResponse(metrics)
+
+
+@app.get("/api/backtests/{run_id}/trades")
+async def get_backtest_trades(run_id: str) -> JSONResponse:
+    """
+    获取指定回测的交易明细（建仓/清仓成对记录，供前端可排序筛选表格与逐笔钻取）。
+
+    Args:
+        run_id: 回测 ID
+
+    Returns:
+        JSONResponse: {"trades": [ {code, open_time, open_price, close_time, close_price,
+                       net_pct, gross_pct, closed, hold_days, commission, tax, cost, remark}, ... ]}
+    """
+    target = next((r for r in _load_run_index() if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+
+    file_name = target.files.get("analyze_transactions")
+    if not file_name:
+        raise HTTPException(status_code=404, detail="未找到交易分析文件")
+    path = os.path.join(RESULTS_DIR, file_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="交易分析文件不存在")
+    try:
+        df = pd.read_excel(path)
+    except Exception as exc:  # noqa: BLE001
+        error(f"读取交易分析文件失败: {exc}")
+        raise HTTPException(status_code=500, detail="读取交易分析文件失败") from exc
+    return JSONResponse({"trades": _json_safe_records(df, _TRADE_COL_MAP)})
+
+
+@app.get("/api/backtests/{run_id}/positions")
+async def get_backtest_positions(run_id: str) -> JSONResponse:
+    """
+    获取指定回测的每日持仓/账户时间线（供前端表格展示）。
+
+    Args:
+        run_id: 回测 ID
+
+    Returns:
+        JSONResponse: {"positions": [ {trade_date, stock_count, stock_cost, stock_value,
+                       available_amount, total_assets}, ... ]}
+    """
+    target = next((r for r in _load_run_index() if r.id == run_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="未找到对应回测记录")
+
+    file_name = target.files.get("position_and_account_changes")
+    if not file_name:
+        raise HTTPException(status_code=404, detail="未找到账户变动文件")
+    df = load_account_changes_df(os.path.join(RESULTS_DIR, file_name))
+    if df.empty:
+        raise HTTPException(status_code=404, detail="账户变动数据为空或字段不全")
+    records = _json_safe_records(df)
+    for rec in records:
+        rec["trade_date"] = _fmt_trade_date(rec.get("trade_date"))
+    return JSONResponse({"positions": records})
 
 
 @app.get("/api/backtests/{run_id}/curve.json")
